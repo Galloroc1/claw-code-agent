@@ -325,6 +325,7 @@ python3 -m src.main tools --limit 10    # Tool inventory
 
 ---
 
+
 ## 🔧 Built-in Tools
 
 The agent has access to 7 core tools:
