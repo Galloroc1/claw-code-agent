@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from .agent_manager import AgentManager
@@ -40,6 +41,7 @@ from .openai_compat import OpenAICompatClient, OpenAICompatError
 from .plugin_runtime import PluginRuntime
 from .session_store import (
     StoredAgentSession,
+    load_agent_session,
     save_agent_session,
     serialize_model_config,
     serialize_runtime_config,
@@ -64,12 +66,14 @@ class LocalCodingAgent:
     parent_agent_id: str | None = None
     managed_group_id: str | None = None
     managed_child_index: int | None = None
+    managed_label: str | None = None
     plugin_runtime: PluginRuntime | None = None
     last_session: AgentSessionState | None = field(default=None, init=False, repr=False)
     last_run_result: AgentRunResult | None = field(default=None, init=False, repr=False)
     active_session_id: str | None = field(default=None, init=False, repr=False)
     last_session_path: str | None = field(default=None, init=False, repr=False)
     managed_agent_id: str | None = field(default=None, init=False, repr=False)
+    resume_source_session_id: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.tool_registry is None:
@@ -81,9 +85,14 @@ class LocalCodingAgent:
                 self.runtime_config.cwd,
                 tuple(str(path) for path in self.runtime_config.additional_working_directories),
             )
-        plugin_tools = self.plugin_runtime.register_tool_aliases(self.tool_registry)
+        registry = dict(self.tool_registry)
+        plugin_tools = self.plugin_runtime.register_tool_aliases(registry)
         if plugin_tools:
-            self.tool_registry = {**self.tool_registry, **plugin_tools}
+            registry = {**registry, **plugin_tools}
+        virtual_tools = self.plugin_runtime.register_virtual_tools(registry)
+        if virtual_tools:
+            registry = {**registry, **virtual_tools}
+        self.tool_registry = registry
         self.client = OpenAICompatClient(self.model_config)
         self.tool_context = build_tool_context(self.runtime_config)
 
@@ -96,6 +105,7 @@ class LocalCodingAgent:
         self.last_run_result = None
         self.active_session_id = None
         self.last_session_path = None
+        self.resume_source_session_id = None
 
     def build_prompt_context(self, scratchpad_directory: Path | None = None):
         return build_prompt_context(
@@ -133,6 +143,7 @@ class LocalCodingAgent:
 
     def run(self, prompt: str) -> AgentRunResult:
         self.managed_agent_id = None
+        self.resume_source_session_id = None
         session_id = uuid4().hex
         scratchpad_directory = self._ensure_scratchpad_directory(session_id)
         result = self._run_prompt(
@@ -147,6 +158,7 @@ class LocalCodingAgent:
 
     def resume(self, prompt: str, stored_session: StoredAgentSession) -> AgentRunResult:
         self.managed_agent_id = None
+        self.resume_source_session_id = stored_session.session_id
         session = AgentSessionState.from_persisted(
             system_prompt_parts=stored_session.system_prompt_parts,
             user_context=stored_session.user_context,
@@ -207,7 +219,8 @@ class LocalCodingAgent:
             parent_agent_id=self.parent_agent_id,
             group_id=self.managed_group_id,
             child_index=self.managed_child_index,
-            label='root' if base_session is None else 'resume',
+            label=self.managed_label or ('root' if base_session is None else 'resume'),
+            resumed_from_session_id=self.resume_source_session_id,
         )
         session = (
             base_session
@@ -521,6 +534,17 @@ class LocalCodingAgent:
                         'message_id': session.messages[tool_message_index].message_id,
                     }
                 )
+                plugin_preflight_messages = self._plugin_tool_preflight_messages(tool_call.name)
+                if plugin_preflight_messages:
+                    stream_events.append(
+                        {
+                            'type': 'plugin_tool_preflight',
+                            'tool_name': tool_call.name,
+                            'tool_call_id': tool_call.id,
+                            'message_id': session.messages[tool_message_index].message_id,
+                            'message_count': len(plugin_preflight_messages),
+                        }
+                    )
                 plugin_block_message = self._plugin_block_message(tool_call.name)
                 if plugin_block_message is not None:
                     tool_result = ToolExecutionResult(
@@ -592,38 +616,12 @@ class LocalCodingAgent:
                                 'message': message,
                             }
                         )
-                plugin_runtime_message = self._build_plugin_tool_runtime_message(
-                    tool_name=tool_call.name,
-                    block_message=plugin_block_message,
-                    plugin_messages=plugin_messages,
-                )
-                if plugin_runtime_message is not None:
-                    session.append_user(
-                        plugin_runtime_message,
-                        metadata={
-                            'kind': 'plugin_tool_runtime',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'plugin_blocked': plugin_block_message is not None,
-                            'plugin_message_count': len(plugin_messages),
-                        },
-                        message_id=f'plugin_tool_runtime_{tool_call.id}',
-                    )
-                    stream_events.append(
-                        {
-                            'type': 'plugin_tool_context',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': f'plugin_tool_runtime_{tool_call.id}',
-                            'blocked': plugin_block_message is not None,
-                            'message_count': len(plugin_messages),
-                        }
-                    )
                 session.finalize_tool(
                     tool_message_index,
                     content=serialize_tool_result(tool_result),
                     metadata={
                         'phase': 'completed',
+                        'plugin_preflight_messages': list(plugin_preflight_messages),
                         **dict(tool_result.metadata),
                     },
                     stop_reason='tool_completed',
@@ -638,6 +636,41 @@ class LocalCodingAgent:
                         'metadata': dict(tool_result.metadata),
                     }
                 )
+                self._append_runtime_tool_followup_events(
+                    stream_events,
+                    tool_call=tool_call,
+                    tool_result=tool_result,
+                )
+                plugin_runtime_message = self._build_plugin_tool_runtime_message(
+                    tool_name=tool_call.name,
+                    preflight_messages=plugin_preflight_messages,
+                    block_message=plugin_block_message,
+                    plugin_messages=plugin_messages,
+                )
+                if plugin_runtime_message is not None:
+                    session.append_user(
+                        plugin_runtime_message,
+                        metadata={
+                            'kind': 'plugin_tool_runtime',
+                            'tool_name': tool_call.name,
+                            'tool_call_id': tool_call.id,
+                            'plugin_blocked': plugin_block_message is not None,
+                            'plugin_message_count': len(plugin_messages),
+                            'plugin_preflight_count': len(plugin_preflight_messages),
+                        },
+                        message_id=f'plugin_tool_runtime_{tool_call.id}',
+                    )
+                    stream_events.append(
+                        {
+                            'type': 'plugin_tool_context',
+                            'tool_name': tool_call.name,
+                            'tool_call_id': tool_call.id,
+                            'message_id': f'plugin_tool_runtime_{tool_call.id}',
+                            'blocked': plugin_block_message is not None,
+                            'message_count': len(plugin_messages),
+                            'preflight_count': len(plugin_preflight_messages),
+                        }
+                    )
                 history_entry = self._build_file_history_entry(
                     tool_call=tool_call,
                     tool_result=tool_result,
@@ -980,6 +1013,11 @@ class LocalCodingAgent:
                     'original_token_estimate': original_tokens,
                     'replacement_token_estimate': replacement_tokens,
                     'snipped_turn_index': turn_index,
+                    'snipped_from_role': message.role,
+                    'snipped_from_message_id': message.message_id,
+                    'snipped_from_kind': message.metadata.get('kind'),
+                    'snipped_from_lineage_id': message.metadata.get('lineage_id'),
+                    'snipped_from_revision': message.metadata.get('revision'),
                 },
             )
             delta = original_tokens - replacement_tokens
@@ -1024,6 +1062,7 @@ class LocalCodingAgent:
         if compact_end <= prefix_count:
             return False
         candidates = session.messages[prefix_count:compact_end]
+        preserved_tail = list(session.messages[compact_end:])
         if not candidates:
             return False
         compacted_tokens = sum(
@@ -1048,6 +1087,7 @@ class LocalCodingAgent:
             estimated_tokens_before=usage_total,
             estimated_tokens_removed=compacted_tokens,
             preserved_tail_count=tail_count,
+            preserved_tail=preserved_tail,
         )
         session.messages = (
             session.messages[:prefix_count]
@@ -1062,6 +1102,11 @@ class LocalCodingAgent:
                 'estimated_tokens_before': usage_total,
                 'estimated_tokens_removed': compacted_tokens,
                 'preserved_tail_count': tail_count,
+                'preserved_tail_ids': [
+                    message.message_id for message in preserved_tail if message.message_id
+                ],
+                'compaction_depth': compact_message.metadata.get('compaction_depth'),
+                'nested_compaction_count': compact_message.metadata.get('nested_compaction_count'),
                 'compacted_message_ids': [
                     message.message_id for message in candidates if message.message_id
                 ],
@@ -1183,6 +1228,7 @@ class LocalCodingAgent:
         estimated_tokens_before: int,
         estimated_tokens_removed: int,
         preserved_tail_count: int,
+        preserved_tail,
     ):
         summary_lines = [
             '<system-reminder>',
@@ -1215,17 +1261,65 @@ class LocalCodingAgent:
         )
         from .agent_session import AgentMessage
 
+        nested_compaction_count = sum(
+            1 for message in messages if message.metadata.get('kind') == 'compact_boundary'
+        )
+        prior_depths = [
+            int(message.metadata.get('compaction_depth', 0))
+            for message in messages
+            if isinstance(message.metadata.get('compaction_depth', 0), int)
+        ]
+        compaction_depth = (max(prior_depths) if prior_depths else 0) + 1
+        compacted_kinds: dict[str, int] = {}
+        compacted_lineage_ids: list[str] = []
+        preserved_tail_lineage_ids = [
+            lineage_id
+            for lineage_id in (
+                message.metadata.get('lineage_id') for message in preserved_tail
+            )
+            if isinstance(lineage_id, str) and lineage_id
+        ]
+        max_source_revision = 0
+        compacted_revision_total = 0
+        for message in messages:
+            kind = message.metadata.get('kind')
+            label = str(kind) if isinstance(kind, str) and kind else message.role
+            compacted_kinds[label] = compacted_kinds.get(label, 0) + 1
+            lineage_id = message.metadata.get('lineage_id')
+            if isinstance(lineage_id, str) and lineage_id:
+                compacted_lineage_ids.append(lineage_id)
+            revision = message.metadata.get('revision')
+            if isinstance(revision, int) and not isinstance(revision, bool):
+                max_source_revision = max(max_source_revision, revision)
+                compacted_revision_total += revision
+
+        compact_boundary_id = f'compact_boundary_{turn_index}_{len(messages)}'
+
         return AgentMessage(
             role='system',
             content='\n'.join(summary_lines),
-            message_id=f'compact_boundary_{turn_index}_{len(messages)}',
+            message_id=compact_boundary_id,
             metadata={
                 'kind': 'compact_boundary',
+                'lineage_id': compact_boundary_id,
+                'revision': 0,
+                'revision_count': 1,
+                'message_role': 'system',
                 'turn_index': turn_index,
                 'compacted_message_count': len(messages),
                 'estimated_tokens_before': estimated_tokens_before,
                 'estimated_tokens_removed': estimated_tokens_removed,
                 'preserved_tail_count': preserved_tail_count,
+                'preserved_tail_ids': [
+                    message.message_id for message in preserved_tail if message.message_id
+                ],
+                'compaction_depth': compaction_depth,
+                'nested_compaction_count': nested_compaction_count,
+                'compacted_kinds': compacted_kinds,
+                'compacted_lineage_ids': compacted_lineage_ids,
+                'preserved_tail_lineage_ids': preserved_tail_lineage_ids,
+                'max_source_revision': max_source_revision,
+                'compacted_revision_total': compacted_revision_total,
                 'compacted_message_ids': [
                     message.message_id for message in messages if message.message_id
                 ],
@@ -1298,6 +1392,7 @@ class LocalCodingAgent:
         failed_children = 0
         child_result = None
         for index, subtask in enumerate(subtasks, start=1):
+            subtask_label = str(subtask.get('label') or f'subtask_{index}')
             child_agent = LocalCodingAgent(
                 model_config=self.model_config,
                 runtime_config=replace(
@@ -1312,6 +1407,7 @@ class LocalCodingAgent:
                 parent_agent_id=self.managed_agent_id,
                 managed_group_id=group_id,
                 managed_child_index=index,
+                managed_label=subtask_label,
             )
             if group_id is not None and child_agent.managed_agent_id is not None:
                 self.agent_manager.register_group_child(
@@ -1322,7 +1418,49 @@ class LocalCodingAgent:
             child_prompt = str(subtask['prompt'])
             if include_parent_context and prior_results:
                 child_prompt = self._prepend_delegate_context(child_prompt, prior_results)
-            child_result = child_agent.run(child_prompt)
+            resume_session_id = subtask.get('resume_session_id')
+            resume_used = False
+            if isinstance(resume_session_id, str) and resume_session_id:
+                try:
+                    stored_child_session = load_agent_session(
+                        resume_session_id,
+                        directory=child_runtime_config.session_directory,
+                    )
+                except OSError:
+                    child_result = AgentRunResult(
+                        final_output=f'Unable to load delegated session {resume_session_id}.',
+                        turns=0,
+                        tool_calls=0,
+                        transcript=(),
+                        stop_reason='resume_load_error',
+                        session_id=resume_session_id,
+                    )
+                    failed_children += 1
+                    summary = {
+                        'index': index,
+                        'label': subtask_label,
+                        'session_id': resume_session_id,
+                        'turns': child_result.turns,
+                        'tool_calls': child_result.tool_calls,
+                        'stop_reason': child_result.stop_reason or 'resume_load_error',
+                        'output_preview': self._preview_text(child_result.final_output, 220),
+                        'resume_used': True,
+                        'resumed_from_session_id': resume_session_id,
+                    }
+                    child_summaries.append(summary)
+                    prior_results.append(
+                        {
+                            'label': summary['label'],
+                            'output_preview': str(summary['output_preview']),
+                        }
+                    )
+                    if not continue_on_error:
+                        break
+                    continue
+                child_result = child_agent.resume(child_prompt, stored_child_session)
+                resume_used = True
+            else:
+                child_result = child_agent.run(child_prompt)
             if group_id is not None and child_agent.managed_agent_id is not None:
                 self.agent_manager.register_group_child(
                     group_id,
@@ -1331,12 +1469,18 @@ class LocalCodingAgent:
                 )
             summary = {
                 'index': index,
-                'label': str(subtask.get('label') or f'subtask_{index}'),
+                'label': subtask_label,
                 'session_id': child_result.session_id or '',
                 'turns': child_result.turns,
                 'tool_calls': child_result.tool_calls,
                 'stop_reason': child_result.stop_reason or 'stop',
                 'output_preview': self._preview_text(child_result.final_output, 220),
+                'resume_used': resume_used,
+                'resumed_from_session_id': (
+                    str(resume_session_id)
+                    if isinstance(resume_session_id, str) and resume_session_id
+                    else ''
+                ),
             }
             child_summaries.append(summary)
             if child_result.session_id:
@@ -1353,6 +1497,9 @@ class LocalCodingAgent:
                     break
         assert child_result is not None
         completed_children = len(child_summaries) - failed_children
+        resumed_children = sum(
+            1 for summary in child_summaries if summary.get('resume_used')
+        )
         group_status = 'completed'
         if failed_children and completed_children:
             group_status = 'partial'
@@ -1375,6 +1522,7 @@ class LocalCodingAgent:
         if group_id is not None:
             summary_lines.append(f'group_id={group_id}')
             summary_lines.append(f'group_status={group_status}')
+            summary_lines.append(f'resumed_children={resumed_children}')
             summary_lines.append('')
         for summary in child_summaries:
             summary_lines.extend(
@@ -1384,6 +1532,8 @@ class LocalCodingAgent:
                     f"turns={summary['turns']}",
                     f"tool_calls={summary['tool_calls']}",
                     f"stop_reason={summary['stop_reason']}",
+                    f"resume_used={summary['resume_used']}",
+                    f"resumed_from_session_id={summary['resumed_from_session_id']}",
                     f"output_preview={summary['output_preview']}",
                     '',
                 ]
@@ -1407,6 +1557,7 @@ class LocalCodingAgent:
                 'group_status': group_status,
                 'failed_children': failed_children,
                 'completed_children': completed_children,
+                'resumed_children': resumed_children,
             },
         )
 
@@ -1431,13 +1582,24 @@ class LocalCodingAgent:
                         'prompt': prompt.strip(),
                         'label': label if isinstance(label, str) and label.strip() else f'subtask_{index}',
                     }
+                    resume_session_id = item.get('resume_session_id')
+                    if resume_session_id is None:
+                        resume_session_id = item.get('session_id')
+                    if isinstance(resume_session_id, str) and resume_session_id.strip():
+                        task['resume_session_id'] = resume_session_id.strip()
                     if isinstance(max_turns, int) and not isinstance(max_turns, bool) and max_turns > 0:
                         task['max_turns'] = max_turns
                     subtasks.append(task)
         prompt = arguments.get('prompt')
         if isinstance(prompt, str) and prompt.strip():
             if not subtasks:
-                subtasks.append({'prompt': prompt.strip(), 'label': 'subtask_1'})
+                task: dict[str, object] = {'prompt': prompt.strip(), 'label': 'subtask_1'}
+                resume_session_id = arguments.get('resume_session_id')
+                if resume_session_id is None:
+                    resume_session_id = arguments.get('session_id')
+                if isinstance(resume_session_id, str) and resume_session_id.strip():
+                    task['resume_session_id'] = resume_session_id.strip()
+                subtasks.append(task)
         return subtasks[:8]
 
     def _delegated_task_units(
@@ -1475,6 +1637,60 @@ class LocalCodingAgent:
             lines.append(f"- {result['label']}: {result['output_preview']}")
         lines.extend(['</system-reminder>', '', prompt])
         return '\n'.join(lines)
+
+    def _append_runtime_tool_followup_events(
+        self,
+        stream_events: list[dict[str, object]],
+        *,
+        tool_call: ToolCall,
+        tool_result: ToolExecutionResult,
+    ) -> None:
+        metadata = tool_result.metadata
+        if metadata.get('action') == 'plugin_virtual_tool':
+            stream_events.append(
+                {
+                    'type': 'plugin_virtual_tool_result',
+                    'tool_call_id': tool_call.id,
+                    'tool_name': tool_call.name,
+                    'plugin_name': metadata.get('plugin_name'),
+                    'virtual_tool': metadata.get('virtual_tool'),
+                }
+            )
+        if tool_call.name != 'delegate_agent':
+            return
+        child_results = metadata.get('child_results')
+        if isinstance(child_results, list):
+            for child in child_results:
+                if not isinstance(child, dict):
+                    continue
+                stream_events.append(
+                    {
+                        'type': 'delegate_subtask_result',
+                        'tool_call_id': tool_call.id,
+                        'group_id': metadata.get('group_id'),
+                        'label': child.get('label'),
+                        'index': child.get('index'),
+                        'session_id': child.get('session_id'),
+                        'stop_reason': child.get('stop_reason'),
+                        'tool_calls': child.get('tool_calls'),
+                        'turns': child.get('turns'),
+                        'resume_used': child.get('resume_used'),
+                        'resumed_from_session_id': child.get('resumed_from_session_id'),
+                    }
+                )
+        if metadata.get('group_id') is not None:
+            stream_events.append(
+                {
+                    'type': 'delegate_group_result',
+                    'tool_call_id': tool_call.id,
+                    'group_id': metadata.get('group_id'),
+                    'group_status': metadata.get('group_status'),
+                    'subtask_count': metadata.get('subtask_count'),
+                    'completed_children': metadata.get('completed_children'),
+                    'failed_children': metadata.get('failed_children'),
+                    'resumed_children': metadata.get('resumed_children'),
+                }
+            )
 
     def _preview_text(self, text: str, limit: int) -> str:
         normalized = ' '.join(text.split())
@@ -1597,12 +1813,31 @@ class LocalCodingAgent:
             lines.append(
                 f"- Latest compact boundary id: {latest_boundary.message_id or '(none)'}"
             )
+            depth = latest_boundary.metadata.get('compaction_depth')
+            if isinstance(depth, int) and not isinstance(depth, bool):
+                lines.append(f'- Latest compaction depth: {depth}')
+            compacted_lineages = latest_boundary.metadata.get('compacted_lineage_ids')
+            if isinstance(compacted_lineages, list) and compacted_lineages:
+                lines.append(f'- Latest compacted lineages: {len(compacted_lineages)}')
+            preserved_tail = latest_boundary.metadata.get('preserved_tail_ids')
+            if isinstance(preserved_tail, list) and preserved_tail:
+                lines.append(
+                    '- Latest preserved tail ids: '
+                    + ', '.join(str(item) for item in preserved_tail[:4])
+                )
         if snipped_messages:
             last_ids = [
                 message.message_id or '(none)'
                 for message in snipped_messages[-3:]
             ]
             lines.append(f"- Recent snipped ids: {', '.join(last_ids)}")
+            snipped_lineages = [
+                str(message.metadata.get('snipped_from_lineage_id'))
+                for message in snipped_messages[-3:]
+                if isinstance(message.metadata.get('snipped_from_lineage_id'), str)
+            ]
+            if snipped_lineages:
+                lines.append(f"- Recent snipped lineages: {', '.join(snipped_lineages)}")
         lines.extend(
             [
                 '',
@@ -1616,19 +1851,22 @@ class LocalCodingAgent:
         self,
         *,
         tool_name: str,
+        preflight_messages: tuple[str, ...],
         block_message: str | None,
         plugin_messages: tuple[str, ...],
     ) -> str | None:
-        if block_message is None and not plugin_messages:
+        if block_message is None and not plugin_messages and not preflight_messages:
             return None
         lines = [
             '<system-reminder>',
             f'Plugin tool runtime guidance for `{tool_name}`:',
         ]
+        for message in preflight_messages:
+            lines.append(f'- Before tool: {message}')
         if block_message is not None:
             lines.append(f'- Blocked: {block_message}')
         for message in plugin_messages:
-            lines.append(f'- {message}')
+            lines.append(f'- After result: {message}')
         lines.extend(
             [
                 '',
@@ -1637,6 +1875,11 @@ class LocalCodingAgent:
             ]
         )
         return '\n'.join(lines)
+
+    def _plugin_tool_preflight_messages(self, tool_name: str) -> tuple[str, ...]:
+        if self.plugin_runtime is None:
+            return ()
+        return self.plugin_runtime.tool_preflight_injections(tool_name)
 
     def _plugin_block_message(self, tool_name: str) -> str | None:
         if self.plugin_runtime is None:
@@ -1763,6 +2006,7 @@ class LocalCodingAgent:
 
     def _finalize_managed_agent(self, result: AgentRunResult) -> None:
         if self.managed_agent_id is None or self.agent_manager is None:
+            self.resume_source_session_id = None
             return
         self.agent_manager.finish_agent(
             self.managed_agent_id,
@@ -1772,6 +2016,7 @@ class LocalCodingAgent:
             tool_calls=result.tool_calls,
             stop_reason=result.stop_reason,
         )
+        self.resume_source_session_id = None
 
     def _apply_plugin_before_prompt_hooks(self, prompt: str) -> str:
         if self.plugin_runtime is None:

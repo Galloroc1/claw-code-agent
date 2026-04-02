@@ -26,6 +26,7 @@ Done:
 - [x] Incremental tool-result streaming for read-only text tools
 - [x] Mutable tool transcript updates during tool execution
 - [x] Transcript mutation history for replaced/tombstoned messages
+- [x] Assistant streaming and tool-call transcript mutation history
 - [x] Structured transcript block export for messages, tool calls, and tool results
 - [x] Resume-time file-history replay reminders
 - [x] Resume-time file-history snapshot previews for file edits
@@ -39,26 +40,42 @@ Done:
 - [x] Sequential multi-subtask delegation with parent-context carryover
 - [x] Basic agent-manager lineage tracking for nested agents
 - [x] Managed agent-group membership tracking with child indices
+- [x] Delegated child-session resume by saved session id
+- [x] Agent-manager tracking for resumed child-session lineage
 - [x] Plugin-cache discovery and prompt-context injection
 - [x] Manifest-based plugin runtime discovery
 - [x] Manifest-defined plugin hooks for before-prompt and after-turn runtime injection
 - [x] Manifest-defined plugin tool aliases over base runtime tools
+- [x] Manifest-defined executable virtual tools
 - [x] Manifest-defined plugin tool blocking
+- [x] Manifest-defined plugin `beforeTool` guidance
 - [x] Manifest-defined plugin tool-result guidance injected back into the transcript
 - [x] Compaction metadata with compacted message ids
+- [x] Compaction metadata with preserved-tail ids and compaction depth
+- [x] Compaction metadata with compacted/preserved lineage ids and revision summaries
+- [x] Snipped-message metadata with source role/kind lineage
+- [x] Snipped-message metadata with source lineage id and revision
 - [x] Resume-time compaction / snipping replay reminder
 - [x] Query-engine facade that can drive the real Python runtime agent
 - [x] Query-engine runtime event counters and transcript-kind summaries
+- [x] Query-engine runtime mutation counters
+- [x] Query-engine stream-level runtime summary event
+- [x] Query-engine transcript-store compaction summaries
+- [x] Delegate-group and delegated-subtask runtime events
+- [x] Query-engine runtime orchestration summaries for group status and child stop reasons
+- [x] Query-engine runtime context-reduction summaries
+- [x] Query-engine runtime lineage summaries
+- [x] Query-engine runtime resumed-child orchestration summaries
 
 Missing:
 
 - [ ] Full partial tool-result streaming parity across the complete tool surface
 - [ ] Full rich transcript mutation behavior like the npm runtime
 - [ ] Full reasoning budgets and task budgets parity
-- [ ] Full multi-agent orchestration parity
+- [ ] Full multi-agent orchestration parity beyond sequential grouped delegation and resumed-child flows
 - [ ] Full file history snapshots and replay flows
-- [ ] Full executable plugin lifecycle beyond runtime guidance, blocking, and aliases
-- [ ] Full session compaction / snipping parity
+- [ ] Full executable plugin lifecycle beyond manifest-driven guidance, blocking, aliases, and virtual tools
+- [ ] Full session compaction / snipping parity beyond lineage-aware summaries and replay reminders
 - [ ] Full `QueryEngine.ts` parity
 
 ## 2. CLI Entrypoints And Runtime Modes

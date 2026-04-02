@@ -11,6 +11,7 @@ class ManagedAgentRecord:
     group_id: str | None = None
     child_index: int | None = None
     label: str | None = None
+    resumed_from_session_id: str | None = None
     session_id: str | None = None
     session_path: str | None = None
     status: str = 'running'
@@ -45,6 +46,7 @@ class AgentManager:
         group_id: str | None = None,
         child_index: int | None = None,
         label: str | None = None,
+        resumed_from_session_id: str | None = None,
     ) -> str:
         self._counter += 1
         agent_id = f'agent_{self._counter}'
@@ -55,6 +57,7 @@ class AgentManager:
             group_id=group_id,
             child_index=child_index,
             label=label,
+            resumed_from_session_id=resumed_from_session_id,
         )
         if group_id is not None:
             self.register_group_child(group_id, agent_id, child_index=child_index)
@@ -110,6 +113,7 @@ class AgentManager:
             group_id=group_id,
             child_index=child_index,
             label=record.label,
+            resumed_from_session_id=record.resumed_from_session_id,
             session_id=record.session_id,
             session_path=record.session_path,
             status=record.status,
@@ -159,6 +163,7 @@ class AgentManager:
             group_id=record.group_id,
             child_index=record.child_index,
             label=record.label,
+            resumed_from_session_id=record.resumed_from_session_id,
             session_id=session_id,
             session_path=session_path,
             status='completed',
@@ -174,6 +179,44 @@ class AgentManager:
             if record.parent_agent_id == agent_id
         )
 
+    def group_children(self, group_id: str) -> tuple[ManagedAgentRecord, ...]:
+        return tuple(
+            sorted(
+                (
+                    record for record in self.records.values()
+                    if record.group_id == group_id
+                ),
+                key=lambda record: (
+                    record.child_index is None,
+                    record.child_index or 0,
+                    record.agent_id,
+                ),
+            )
+        )
+
+    def group_summary(self, group_id: str) -> dict[str, object] | None:
+        group = self.groups.get(group_id)
+        if group is None:
+            return None
+        children = self.group_children(group_id)
+        stop_reason_counts: dict[str, int] = {}
+        resumed_children = 0
+        for child in children:
+            if child.resumed_from_session_id:
+                resumed_children += 1
+            stop_reason = child.stop_reason or 'n/a'
+            stop_reason_counts[stop_reason] = stop_reason_counts.get(stop_reason, 0) + 1
+        return {
+            'group_id': group.group_id,
+            'label': group.label,
+            'status': group.status,
+            'child_count': len(children),
+            'completed_children': group.completed_children,
+            'failed_children': group.failed_children,
+            'resumed_children': resumed_children,
+            'stop_reason_counts': stop_reason_counts,
+        }
+
     def completed_records(self) -> tuple[ManagedAgentRecord, ...]:
         return tuple(
             record for record in self.records.values() if record.status == 'completed'
@@ -186,6 +229,10 @@ class AgentManager:
         ]
         child_count = sum(1 for record in self.records.values() if record.parent_agent_id)
         lines.append(f'- Child agents: {child_count}')
+        resumed_count = sum(
+            1 for record in self.records.values() if record.resumed_from_session_id
+        )
+        lines.append(f'- Resumed agents: {resumed_count}')
         lines.append(f'- Agent groups: {len(self.groups)}')
         completed_groups = sum(1 for group in self.groups.values() if group.status == 'completed')
         lines.append(f'- Completed groups: {completed_groups}')
@@ -196,6 +243,8 @@ class AgentManager:
                 group_bits.append(f'group={record.group_id}')
             if record.child_index is not None:
                 group_bits.append(f'child_index={record.child_index}')
+            if record.resumed_from_session_id is not None:
+                group_bits.append(f'resumed_from={record.resumed_from_session_id}')
             group_suffix = f" {' '.join(group_bits)}" if group_bits else ''
             lines.append(
                 f'- {label}: status={record.status} turns={record.turns} '
@@ -205,9 +254,19 @@ class AgentManager:
             lines.append(f'- ... plus {len(self.records) - 8} more managed agents')
         for group in sorted(self.groups.values(), key=lambda item: item.group_id)[:6]:
             label = group.label or group.group_id
+            summary = self.group_summary(group.group_id)
+            if summary is None:
+                continue
+            stop_bits = summary['stop_reason_counts']
+            stop_suffix = ''
+            if isinstance(stop_bits, dict) and stop_bits:
+                stop_suffix = ' stop_reasons=' + ','.join(
+                    f'{name}:{count}' for name, count in sorted(stop_bits.items())
+                )
             lines.append(
                 f'- {label}: group_status={group.status} children={len(group.child_agent_ids)} '
-                f'completed={group.completed_children} failed={group.failed_children}'
+                f'completed={group.completed_children} failed={group.failed_children} '
+                f"resumed={summary['resumed_children']}{stop_suffix}"
             )
         if len(self.groups) > 6:
             lines.append(f'- ... plus {len(self.groups) - 6} more agent groups')

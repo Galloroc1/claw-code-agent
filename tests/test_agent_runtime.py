@@ -362,6 +362,14 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(result.scratchpad_directory)
         assert result.scratchpad_directory is not None
         self.assertTrue(Path(result.scratchpad_directory).is_dir())
+        assistant_messages = [
+            message for message in result.transcript if message.get('role') == 'assistant'
+        ]
+        self.assertEqual(len(assistant_messages), 1)
+        metadata = assistant_messages[0].get('metadata', {})
+        mutation_totals = metadata.get('mutation_totals', {})
+        self.assertGreaterEqual(mutation_totals.get('assistant_delta_append', 0), 2)
+        self.assertEqual(mutation_totals.get('assistant_finalize', 0), 1)
 
     def test_agent_streams_tool_calls_and_reconstructs_arguments(self) -> None:
         responses = [
@@ -439,6 +447,15 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(result.usage.output_tokens, 6)
         assistant_messages = [message for message in result.transcript if message.get('role') == 'assistant']
         self.assertTrue(any(message.get('tool_calls') for message in assistant_messages))
+        assistant_with_tool = next(
+            message
+            for message in assistant_messages
+            if message.get('tool_calls')
+        )
+        metadata = assistant_with_tool.get('metadata', {})
+        mutation_totals = metadata.get('mutation_totals', {})
+        self.assertGreaterEqual(mutation_totals.get('assistant_tool_call_delta', 0), 2)
+        self.assertEqual(mutation_totals.get('assistant_finalize', 0), 1)
 
     def test_transcript_entries_include_structured_blocks(self) -> None:
         responses = [
@@ -578,6 +595,10 @@ class AgentRuntimeTests(unittest.TestCase):
             if message.get('metadata', {}).get('kind') == 'compact_boundary'
         ]
         self.assertEqual(len(transcript_compact_messages), 1)
+        compact_metadata = transcript_compact_messages[0].get('metadata', {})
+        self.assertEqual(compact_metadata.get('compaction_depth'), 1)
+        self.assertEqual(compact_metadata.get('nested_compaction_count'), 0)
+        self.assertIn('preserved_tail_ids', compact_metadata)
 
     def test_agent_enforces_total_token_budget(self) -> None:
         responses = [
@@ -1386,6 +1407,9 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(len(metadata.get('child_session_ids', [])), 2)
         self.assertEqual(len(metadata.get('child_results', [])), 2)
         self.assertIn('Delegated agent completed 2 sequential subtasks.', tool_messages[0].get('content', ''))
+        self.assertTrue(any(event.get('type') == 'delegate_group_result' for event in result.events))
+        child_events = [event for event in result.events if event.get('type') == 'delegate_subtask_result']
+        self.assertEqual(len(child_events), 2)
         second_child_request = recorded_payloads[2]['messages']
         assert isinstance(second_child_request, list)
         self.assertTrue(
@@ -1496,6 +1520,153 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertTrue(all(record.group_id == group.group_id for record in child_records))
         summary = '\n'.join(manager.summary_lines())
         self.assertIn(f'group={group.group_id}', summary)
+
+    def test_agent_can_delegate_into_resumed_child_session(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Seed child result.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ],
+                'usage': {'prompt_tokens': 5, 'completion_tokens': 2},
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Delegating into a resumed child session.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'delegate_agent',
+                                        'arguments': '{}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ],
+                'usage': {'prompt_tokens': 8, 'completion_tokens': 3},
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Resumed child result.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ],
+                'usage': {'prompt_tokens': 6, 'completion_tokens': 2},
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Parent completed after resumed child.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ],
+                'usage': {'prompt_tokens': 7, 'completion_tokens': 2},
+            },
+        ]
+        recorded_payloads: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            session_dir = workspace / '.port_sessions' / 'agent'
+            with patch(
+                'src.openai_compat.request.urlopen',
+                side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
+            ):
+                seed_agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(
+                        cwd=workspace,
+                        session_directory=session_dir,
+                    ),
+                )
+                seeded = seed_agent.run('Seed the delegated child')
+                resumed_child_id = seeded.session_id or ''
+
+                delegate_arguments = json.dumps(
+                    {
+                        'subtasks': [
+                            {
+                                'label': 'resume_child',
+                                'prompt': 'Continue the delegated child.',
+                                'resume_session_id': resumed_child_id,
+                                'max_turns': 2,
+                            }
+                        ],
+                        'max_turns': 2,
+                    }
+                )
+                responses[1]['choices'][0]['message']['tool_calls'][0]['function']['arguments'] = delegate_arguments
+
+                parent_agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(
+                        cwd=workspace,
+                        session_directory=session_dir,
+                    ),
+                )
+                result = parent_agent.run('Delegate into the resumed child')
+
+        self.assertEqual(result.final_output, 'Parent completed after resumed child.')
+        tool_messages = [message for message in result.transcript if message.get('role') == 'tool']
+        self.assertEqual(len(tool_messages), 1)
+        metadata = tool_messages[0].get('metadata', {})
+        self.assertEqual(metadata.get('resumed_children'), 1)
+        child_results = metadata.get('child_results', [])
+        self.assertEqual(len(child_results), 1)
+        self.assertEqual(child_results[0].get('resume_used'), True)
+        self.assertEqual(child_results[0].get('resumed_from_session_id'), resumed_child_id)
+        self.assertTrue(
+            any(
+                event.get('type') == 'delegate_subtask_result'
+                and event.get('resume_used')
+                for event in result.events
+            )
+        )
+        resumed_child_messages = recorded_payloads[2]['messages']
+        assert isinstance(resumed_child_messages, list)
+        resumed_contents = [
+            message.get('content')
+            for message in resumed_child_messages
+            if isinstance(message, dict)
+        ]
+        self.assertIn('Seed the delegated child', resumed_contents)
+        self.assertIn('Seed child result.', resumed_contents)
+        self.assertIn('Continue the delegated child.', resumed_contents)
+        manager = parent_agent.agent_manager
+        assert manager is not None
+        child_records = [
+            record
+            for record in manager.completed_records()
+            if record.parent_agent_id == parent_agent.managed_agent_id
+        ]
+        self.assertEqual(len(child_records), 1)
+        self.assertEqual(child_records[0].resumed_from_session_id, resumed_child_id)
+        summary = '\n'.join(manager.summary_lines())
+        self.assertIn(f'resumed_from={resumed_child_id}', summary)
 
     def test_agent_enforces_reasoning_token_budget(self) -> None:
         responses = [

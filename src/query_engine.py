@@ -55,7 +55,17 @@ class QueryEnginePort:
     plugin_runtime: PluginRuntime | None = None
     runtime_event_counts: dict[str, int] = field(default_factory=dict)
     runtime_message_kind_counts: dict[str, int] = field(default_factory=dict)
+    runtime_mutation_counts: dict[str, int] = field(default_factory=dict)
+    runtime_group_status_counts: dict[str, int] = field(default_factory=dict)
+    runtime_child_stop_reason_counts: dict[str, int] = field(default_factory=dict)
+    runtime_resumed_children: int = 0
+    runtime_context_reduction: dict[str, int] = field(default_factory=dict)
+    runtime_lineage_stats: dict[str, int] = field(default_factory=dict)
     runtime_transcript_size: int = 0
+    _runtime_seen_lineages: set[str] = field(default_factory=set, init=False, repr=False)
+    _runtime_revised_lineages: set[str] = field(default_factory=set, init=False, repr=False)
+    _runtime_tombstoned_lineages: set[str] = field(default_factory=set, init=False, repr=False)
+    _runtime_compacted_lineages: set[str] = field(default_factory=set, init=False, repr=False)
     last_turn: TurnResult | None = field(default=None, init=False, repr=False)
 
     @classmethod
@@ -180,6 +190,7 @@ class QueryEnginePort:
         if self.config.use_runtime_agent:
             for event in result.events:
                 yield event
+            yield self._runtime_summary_event()
             yield {
                 'type': 'message_stop',
                 'usage': {
@@ -217,7 +228,7 @@ class QueryEnginePort:
         path = save_session(
             StoredSession(
                 session_id=self.session_id,
-                messages=tuple(self.mutable_messages),
+                messages=self.transcript_store.replay(),
                 input_tokens=self.total_usage.input_tokens,
                 output_tokens=self.total_usage.output_tokens,
             )
@@ -247,6 +258,7 @@ class QueryEnginePort:
             f'Transcript flushed: {self.transcript_store.flushed}',
             f'Real runtime agent mode: {self.config.use_runtime_agent}',
         ]
+        sections.extend(['', '## Transcript Store', *self.transcript_store.summary_lines()])
         if self.plugin_runtime is not None:
             sections.extend(['', '## Plugin Runtime', self.plugin_runtime.render_summary()])
         if self.runtime_agent is not None and self.runtime_agent.agent_manager is not None:
@@ -263,6 +275,38 @@ class QueryEnginePort:
             sections.extend(
                 f'- {name}={count}'
                 for name, count in sorted(self.runtime_message_kind_counts.items())
+            )
+        if self.runtime_mutation_counts:
+            sections.extend(['', '## Runtime Mutations'])
+            sections.extend(
+                f'- {name}={count}'
+                for name, count in sorted(self.runtime_mutation_counts.items())
+            )
+        if self.runtime_group_status_counts or self.runtime_child_stop_reason_counts:
+            sections.extend(['', '## Runtime Orchestration'])
+            if self.runtime_group_status_counts:
+                sections.extend(
+                    f'- group_status:{name}={count}'
+                    for name, count in sorted(self.runtime_group_status_counts.items())
+                )
+            if self.runtime_child_stop_reason_counts:
+                sections.extend(
+                    f'- child_stop:{name}={count}'
+                    for name, count in sorted(self.runtime_child_stop_reason_counts.items())
+                )
+            if self.runtime_resumed_children:
+                sections.append(f'- resumed_children={self.runtime_resumed_children}')
+        if self.runtime_context_reduction:
+            sections.extend(['', '## Runtime Context Reduction'])
+            sections.extend(
+                f'- {name}={count}'
+                for name, count in sorted(self.runtime_context_reduction.items())
+            )
+        if self.runtime_lineage_stats:
+            sections.extend(['', '## Runtime Lineage'])
+            sections.extend(
+                f'- {name}={count}'
+                for name, count in sorted(self.runtime_lineage_stats.items())
             )
         if self.last_turn is not None:
             sections.extend(
@@ -303,8 +347,8 @@ class QueryEnginePort:
         denied_tools: tuple[PermissionDenial, ...],
     ) -> None:
         self.mutable_messages.append(prompt)
-        self.transcript_store.append(prompt)
-        self.transcript_store.append(turn.output)
+        self.transcript_store.append(prompt, kind='prompt')
+        self.transcript_store.append(turn.output, kind='output')
         if self.config.use_runtime_agent:
             self._record_runtime_turn(turn)
         self.permission_denials.extend(denied_tools)
@@ -334,7 +378,22 @@ class QueryEnginePort:
             self.runtime_event_counts[event_type] = (
                 self.runtime_event_counts.get(event_type, 0) + 1
             )
+            if event_type == 'delegate_group_result':
+                group_status = event.get('group_status')
+                if isinstance(group_status, str) and group_status:
+                    self.runtime_group_status_counts[group_status] = (
+                        self.runtime_group_status_counts.get(group_status, 0) + 1
+                    )
+            elif event_type == 'delegate_subtask_result':
+                stop_reason = event.get('stop_reason')
+                if isinstance(stop_reason, str) and stop_reason:
+                    self.runtime_child_stop_reason_counts[stop_reason] = (
+                        self.runtime_child_stop_reason_counts.get(stop_reason, 0) + 1
+                    )
+                if bool(event.get('resume_used')):
+                    self.runtime_resumed_children += 1
         kind_counts: dict[str, int] = {}
+        mutation_counts: dict[str, int] = {}
         for entry in turn.transcript:
             if not isinstance(entry, dict):
                 continue
@@ -342,20 +401,76 @@ class QueryEnginePort:
             if not isinstance(metadata, dict):
                 continue
             kind = metadata.get('kind')
-            if not isinstance(kind, str) or not kind:
-                continue
-            kind_counts[kind] = kind_counts.get(kind, 0) + 1
-            self.runtime_message_kind_counts[kind] = (
-                self.runtime_message_kind_counts.get(kind, 0) + 1
-            )
-        summary = self._summarize_runtime_turn(event_counts, kind_counts, len(turn.transcript))
+            if isinstance(kind, str) and kind:
+                kind_counts[kind] = kind_counts.get(kind, 0) + 1
+                self.runtime_message_kind_counts[kind] = (
+                    self.runtime_message_kind_counts.get(kind, 0) + 1
+                )
+            mutation_totals = metadata.get('mutation_totals')
+            if isinstance(mutation_totals, dict):
+                for mutation_kind, count in mutation_totals.items():
+                    if (
+                        not isinstance(mutation_kind, str)
+                        or not mutation_kind
+                        or isinstance(count, bool)
+                        or not isinstance(count, int)
+                        or count <= 0
+                    ):
+                        continue
+                    mutation_counts[mutation_kind] = mutation_counts.get(mutation_kind, 0) + count
+                    self.runtime_mutation_counts[mutation_kind] = (
+                        self.runtime_mutation_counts.get(mutation_kind, 0) + count
+                    )
+            else:
+                mutations = metadata.get('mutations')
+                if isinstance(mutations, list):
+                    for mutation in mutations:
+                        if not isinstance(mutation, dict):
+                            continue
+                        mutation_kind = mutation.get('kind')
+                        if not isinstance(mutation_kind, str) or not mutation_kind:
+                            continue
+                        mutation_counts[mutation_kind] = mutation_counts.get(mutation_kind, 0) + 1
+                        self.runtime_mutation_counts[mutation_kind] = (
+                            self.runtime_mutation_counts.get(mutation_kind, 0) + 1
+                        )
+            self._record_context_reduction(metadata)
+            self._record_lineage(metadata)
+        summary = self._summarize_runtime_turn(
+            event_counts,
+            kind_counts,
+            mutation_counts,
+            len(turn.transcript),
+        )
         if summary:
-            self.transcript_store.append(summary)
+            self.transcript_store.append(
+                summary,
+                kind='runtime_summary',
+                metadata={
+                    'runtime_event_counts': dict(event_counts),
+                    'runtime_kind_counts': dict(kind_counts),
+                    'runtime_mutation_counts': dict(mutation_counts),
+                    'runtime_transcript_size': len(turn.transcript),
+                },
+            )
+        if event_counts:
+            self.transcript_store.append(
+                json.dumps(event_counts, sort_keys=True),
+                kind='runtime_events',
+                metadata={'counts': dict(event_counts)},
+            )
+        if kind_counts:
+            self.transcript_store.append(
+                json.dumps(kind_counts, sort_keys=True),
+                kind='runtime_message_kinds',
+                metadata={'counts': dict(kind_counts)},
+            )
 
     def _summarize_runtime_turn(
         self,
         event_counts: dict[str, int],
         kind_counts: dict[str, int],
+        mutation_counts: dict[str, int],
         transcript_size: int,
     ) -> str:
         parts = [f'runtime_transcript={transcript_size}']
@@ -375,4 +490,116 @@ class QueryEnginePort:
                     for name, count in sorted(kind_counts.items())
                 )
             )
+        if mutation_counts:
+            parts.append(
+                'mutations='
+                + ', '.join(
+                    f'{name}:{count}'
+                    for name, count in sorted(mutation_counts.items())
+                )
+            )
         return '[runtime] ' + ' | '.join(parts)
+
+    def _runtime_summary_event(self) -> dict[str, object]:
+        return {
+            'type': 'runtime_summary',
+            'runtime_event_counts': dict(self.runtime_event_counts),
+            'runtime_message_kind_counts': dict(self.runtime_message_kind_counts),
+            'runtime_mutation_counts': dict(self.runtime_mutation_counts),
+            'runtime_group_status_counts': dict(self.runtime_group_status_counts),
+            'runtime_child_stop_reason_counts': dict(self.runtime_child_stop_reason_counts),
+            'runtime_resumed_children': self.runtime_resumed_children,
+            'runtime_context_reduction': dict(self.runtime_context_reduction),
+            'runtime_lineage_stats': dict(self.runtime_lineage_stats),
+            'runtime_transcript_size': self.runtime_transcript_size,
+            'transcript_store_entries': len(self.transcript_store.entries),
+            'transcript_store_compactions': self.transcript_store.compaction_count,
+        }
+
+    def _record_context_reduction(self, metadata: dict[str, object]) -> None:
+        kind = metadata.get('kind')
+        if kind == 'compact_boundary':
+            self.runtime_context_reduction['compact_boundaries'] = (
+                self.runtime_context_reduction.get('compact_boundaries', 0) + 1
+            )
+            depth = metadata.get('compaction_depth')
+            if isinstance(depth, int) and not isinstance(depth, bool):
+                current = self.runtime_context_reduction.get('max_compaction_depth', 0)
+                self.runtime_context_reduction['max_compaction_depth'] = max(current, depth)
+            nested = metadata.get('nested_compaction_count')
+            if isinstance(nested, int) and not isinstance(nested, bool):
+                self.runtime_context_reduction['nested_compaction_count'] = (
+                    self.runtime_context_reduction.get('nested_compaction_count', 0) + nested
+                )
+            preserved_tail_count = metadata.get('preserved_tail_count')
+            if isinstance(preserved_tail_count, int) and not isinstance(preserved_tail_count, bool):
+                self.runtime_context_reduction['preserved_tail_messages'] = (
+                    self.runtime_context_reduction.get('preserved_tail_messages', 0)
+                    + preserved_tail_count
+                )
+            compacted_lineage_ids = metadata.get('compacted_lineage_ids')
+            if isinstance(compacted_lineage_ids, list):
+                self.runtime_context_reduction['compacted_lineages'] = (
+                    self.runtime_context_reduction.get('compacted_lineages', 0)
+                    + len(
+                        [
+                            lineage_id for lineage_id in compacted_lineage_ids
+                            if isinstance(lineage_id, str) and lineage_id
+                        ]
+                    )
+                )
+        elif kind == 'snipped_message':
+            self.runtime_context_reduction['snipped_messages'] = (
+                self.runtime_context_reduction.get('snipped_messages', 0) + 1
+            )
+            revision = metadata.get('snipped_from_revision')
+            if isinstance(revision, int) and not isinstance(revision, bool) and revision > 0:
+                self.runtime_context_reduction['snipped_revised_messages'] = (
+                    self.runtime_context_reduction.get('snipped_revised_messages', 0) + 1
+                )
+
+    def _record_lineage(self, metadata: dict[str, object]) -> None:
+        lineage_id = metadata.get('lineage_id')
+        if isinstance(lineage_id, str) and lineage_id:
+            self._runtime_seen_lineages.add(lineage_id)
+            revision = metadata.get('revision')
+            if isinstance(revision, int) and not isinstance(revision, bool):
+                current = self.runtime_lineage_stats.get('max_revision', 0)
+                self.runtime_lineage_stats['max_revision'] = max(current, revision)
+                if revision > 0:
+                    self._runtime_revised_lineages.add(lineage_id)
+            revision_count = metadata.get('revision_count')
+            if isinstance(revision_count, int) and not isinstance(revision_count, bool):
+                current = self.runtime_lineage_stats.get('max_revision_count', 0)
+                self.runtime_lineage_stats['max_revision_count'] = max(current, revision_count)
+
+        kind = metadata.get('kind')
+        if kind == 'snipped_message':
+            source_lineage = metadata.get('snipped_from_lineage_id')
+            if isinstance(source_lineage, str) and source_lineage:
+                self._runtime_tombstoned_lineages.add(source_lineage)
+        elif kind == 'compact_boundary':
+            compacted_lineage_ids = metadata.get('compacted_lineage_ids')
+            if isinstance(compacted_lineage_ids, list):
+                for source_lineage in compacted_lineage_ids:
+                    if isinstance(source_lineage, str) and source_lineage:
+                        self._runtime_compacted_lineages.add(source_lineage)
+            max_source_revision = metadata.get('max_source_revision')
+            if (
+                isinstance(max_source_revision, int)
+                and not isinstance(max_source_revision, bool)
+            ):
+                current = self.runtime_lineage_stats.get('max_source_revision', 0)
+                self.runtime_lineage_stats['max_source_revision'] = max(
+                    current,
+                    max_source_revision,
+                )
+
+        self.runtime_lineage_stats['seen_lineages'] = len(self._runtime_seen_lineages)
+        self.runtime_lineage_stats['revised_lineages'] = len(self._runtime_revised_lineages)
+        self.runtime_lineage_stats['tombstoned_lineages'] = len(
+            self._runtime_tombstoned_lineages
+        )
+        self.runtime_lineage_stats['compacted_lineages'] = len(
+            self._runtime_compacted_lineages
+        )

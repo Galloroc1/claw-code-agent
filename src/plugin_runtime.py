@@ -16,8 +16,18 @@ class PluginToolAlias:
 @dataclass(frozen=True)
 class PluginToolHook:
     tool_name: str
+    before_tool: str | None = None
     after_result: str | None = None
     block_message: str | None = None
+
+
+@dataclass(frozen=True)
+class PluginVirtualTool:
+    name: str
+    description: str
+    response_template: str
+    parameters: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,7 @@ class PluginManifest:
     tool_names: tuple[str, ...] = ()
     hook_names: tuple[str, ...] = ()
     tool_aliases: tuple[PluginToolAlias, ...] = ()
+    virtual_tools: tuple[PluginVirtualTool, ...] = ()
     tool_hooks: tuple[PluginToolHook, ...] = ()
     blocked_tools: tuple[str, ...] = ()
     before_prompt: str | None = None
@@ -68,6 +79,11 @@ class PluginRuntime:
                 lines.append(
                     'Tool aliases: '
                     + ', '.join(alias.name for alias in manifest.tool_aliases)
+                )
+            if manifest.virtual_tools:
+                lines.append(
+                    'Virtual tools: '
+                    + ', '.join(tool.name for tool in manifest.virtual_tools)
                 )
             if manifest.blocked_tools:
                 lines.append(
@@ -114,6 +130,26 @@ class PluginRuntime:
                 )
         return aliases
 
+    def register_virtual_tools(
+        self,
+        base_registry: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .agent_tools import AgentTool
+
+        tools: dict[str, AgentTool] = {}
+        occupied = set(base_registry or {})
+        for manifest in self.manifests:
+            for tool in manifest.virtual_tools:
+                if tool.name in occupied or tool.name in tools:
+                    continue
+                tools[tool.name] = AgentTool(
+                    name=tool.name,
+                    description=tool.description,
+                    parameters=tool.parameters or {'type': 'object', 'properties': {}},
+                    handler=_build_virtual_tool_handler(manifest.name, tool),
+                )
+        return tools
+
     def blocked_tool_message(self, tool_name: str) -> str | None:
         for manifest in self.manifests:
             if tool_name in manifest.blocked_tools:
@@ -122,6 +158,14 @@ class PluginRuntime:
                 if hook.tool_name == tool_name and hook.block_message:
                     return hook.block_message
         return None
+
+    def tool_preflight_injections(self, tool_name: str) -> tuple[str, ...]:
+        messages: list[str] = []
+        for manifest in self.manifests:
+            for hook in manifest.tool_hooks:
+                if hook.tool_name == tool_name and hook.before_tool:
+                    messages.append(f'{manifest.name}: {hook.before_tool}')
+        return tuple(messages)
 
     def tool_result_injections(self, tool_name: str) -> tuple[str, ...]:
         messages: list[str] = []
@@ -145,6 +189,8 @@ class PluginRuntime:
                 details.append(f'hooks={len(manifest.hook_names)}')
             if manifest.tool_aliases:
                 details.append(f'aliases={len(manifest.tool_aliases)}')
+            if manifest.virtual_tools:
+                details.append(f'virtual_tools={len(manifest.virtual_tools)}')
             if manifest.blocked_tools:
                 details.append(f'blocked={len(manifest.blocked_tools)}')
             if manifest.tool_hooks:
@@ -211,6 +257,7 @@ def _load_manifest(path: Path) -> PluginManifest | None:
         tool_names=_extract_string_tuple(payload.get('tools')),
         hook_names=hook_names,
         tool_aliases=_extract_tool_aliases(payload),
+        virtual_tools=_extract_virtual_tools(payload),
         tool_hooks=_extract_tool_hooks(payload),
         blocked_tools=_extract_string_tuple(
             payload.get('blocked_tools')
@@ -303,6 +350,9 @@ def _extract_tool_hooks(payload: dict[str, Any]) -> tuple[PluginToolHook, ...]:
                 continue
             if not isinstance(value, dict):
                 continue
+            before_tool = value.get('beforeTool')
+            if before_tool is None:
+                before_tool = value.get('before_tool')
             after_result = value.get('afterResult')
             if after_result is None:
                 after_result = value.get('after_result')
@@ -312,8 +362,80 @@ def _extract_tool_hooks(payload: dict[str, Any]) -> tuple[PluginToolHook, ...]:
             hooks.append(
                 PluginToolHook(
                     tool_name=tool_name.strip(),
+                    before_tool=_optional_string(before_tool),
                     after_result=_optional_string(after_result),
                     block_message=_optional_string(block_message),
                 )
             )
     return tuple(hooks)
+
+
+def _extract_virtual_tools(payload: dict[str, Any]) -> tuple[PluginVirtualTool, ...]:
+    raw_tools = payload.get('virtual_tools')
+    if raw_tools is None:
+        raw_tools = payload.get('virtualTools')
+    if raw_tools is None:
+        raw_tools = payload.get('runtimeTools')
+    tools: list[PluginVirtualTool] = []
+    if isinstance(raw_tools, list):
+        for item in raw_tools:
+            if not isinstance(item, dict):
+                continue
+            name = _optional_string(item.get('name'))
+            description = _optional_string(item.get('description'))
+            response_template = item.get('responseTemplate')
+            if response_template is None:
+                response_template = item.get('response_template')
+            if response_template is None:
+                response_template = item.get('response')
+            response_text = _optional_string(response_template)
+            parameters = item.get('parameters')
+            metadata = item.get('metadata')
+            if not name or not description or not response_text:
+                continue
+            tools.append(
+                PluginVirtualTool(
+                    name=name,
+                    description=description,
+                    response_template=response_text,
+                    parameters=dict(parameters) if isinstance(parameters, dict) else {},
+                    metadata=dict(metadata) if isinstance(metadata, dict) else {},
+                )
+            )
+    return tuple(tools)
+
+
+def _build_virtual_tool_handler(
+    plugin_name: str,
+    tool: PluginVirtualTool,
+):
+    def _handler(arguments: dict[str, Any], context):  # noqa: ANN001
+        rendered = _render_virtual_tool_response(tool.response_template, arguments)
+        metadata = {
+            'action': 'plugin_virtual_tool',
+            'plugin_name': plugin_name,
+            'virtual_tool': tool.name,
+            **tool.metadata,
+        }
+        return rendered, metadata
+
+    return _handler
+
+
+def _render_virtual_tool_response(
+    template: str,
+    arguments: dict[str, Any],
+) -> str:
+    normalized = {
+        key: json.dumps(value, ensure_ascii=True) if isinstance(value, (dict, list)) else str(value)
+        for key, value in arguments.items()
+    }
+    try:
+        return template.format_map(_SafeTemplateDict(normalized))
+    except Exception:
+        return template
+
+
+class _SafeTemplateDict(dict[str, str]):
+    def __missing__(self, key: str) -> str:
+        return '{' + key + '}'

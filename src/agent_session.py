@@ -114,6 +114,10 @@ class AgentSessionState:
                     _append_system_context(system_prompt_parts, state.system_context)
                 ),
                 blocks=_text_blocks('\n\n'.join(_append_system_context(system_prompt_parts, state.system_context))),
+                metadata=_initialize_message_metadata(
+                    role='system',
+                    message_id='system_0',
+                ),
             )
         )
         if state.user_context:
@@ -122,6 +126,10 @@ class AgentSessionState:
                     role='user',
                     content=_render_user_context_reminder(state.user_context),
                     blocks=_text_blocks(_render_user_context_reminder(state.user_context)),
+                    metadata=_initialize_message_metadata(
+                        role='user',
+                        message_id='user_context_0',
+                    ),
                 )
             )
         if user_prompt is not None:
@@ -130,6 +138,10 @@ class AgentSessionState:
                     role='user',
                     content=user_prompt,
                     blocks=_text_blocks(user_prompt),
+                    metadata=_initialize_message_metadata(
+                        role='user',
+                        message_id='user_0',
+                    ),
                 )
             )
         return state
@@ -152,6 +164,10 @@ class AgentSessionState:
                 message_id=message_id,
                 stop_reason=stop_reason,
                 usage=usage or UsageStats(),
+                metadata=_initialize_message_metadata(
+                    role='assistant',
+                    message_id=message_id or f'assistant_{len(self.messages)}',
+                ),
             )
         )
 
@@ -168,16 +184,29 @@ class AgentSessionState:
                 blocks=(),
                 message_id=message_id,
                 state='streaming',
+                metadata=_initialize_message_metadata(
+                    role='assistant',
+                    message_id=message_id or f'assistant_{len(self.messages)}',
+                ),
             )
         )
         return len(self.messages) - 1
 
     def append_assistant_delta(self, index: int, delta: str) -> None:
         message = self.messages[index]
+        merged_metadata = _record_mutation(
+            dict(message.metadata),
+            mutation_kind='assistant_delta_append',
+            previous_content=message.content,
+            previous_state=message.state,
+            previous_stop_reason=message.stop_reason,
+        )
+        merged_metadata = _advance_lineage_revision(merged_metadata)
         self.messages[index] = replace(
             message,
             content=message.content + delta,
             blocks=_assistant_blocks(message.content + delta, message.tool_calls),
+            metadata=merged_metadata,
         )
 
     def merge_assistant_tool_call_delta(
@@ -211,10 +240,19 @@ class AgentSessionState:
         if arguments_delta:
             current_arguments = function_block.get('arguments', '')
             function_block['arguments'] = f'{current_arguments}{arguments_delta}'
+        merged_metadata = _record_mutation(
+            dict(message.metadata),
+            mutation_kind='assistant_tool_call_delta',
+            previous_content=message.content,
+            previous_state=message.state,
+            previous_stop_reason=message.stop_reason,
+        )
+        merged_metadata = _advance_lineage_revision(merged_metadata)
         self.messages[index] = replace(
             message,
             tool_calls=tuple(tool_calls),
             blocks=_assistant_blocks(message.content, tuple(tool_calls)),
+            metadata=merged_metadata,
         )
 
     def finalize_assistant(
@@ -225,12 +263,21 @@ class AgentSessionState:
         usage: UsageStats | None = None,
     ) -> None:
         message = self.messages[index]
+        merged_metadata = _record_mutation(
+            dict(message.metadata),
+            mutation_kind='assistant_finalize',
+            previous_content=message.content,
+            previous_state=message.state,
+            previous_stop_reason=message.stop_reason,
+        )
+        merged_metadata = _advance_lineage_revision(merged_metadata)
         self.messages[index] = replace(
             message,
             state='final',
             stop_reason=finish_reason,
             usage=usage or message.usage,
             blocks=_assistant_blocks(message.content, message.tool_calls),
+            metadata=merged_metadata,
         )
 
     def append_user(
@@ -245,7 +292,11 @@ class AgentSessionState:
                 role='user',
                 content=content,
                 blocks=_text_blocks(content),
-                metadata=dict(metadata or {}),
+                metadata=_initialize_message_metadata(
+                    role='user',
+                    message_id=message_id or f'user_{len(self.messages)}',
+                    metadata=dict(metadata or {}),
+                ),
                 message_id=message_id,
             )
         )
@@ -258,6 +309,11 @@ class AgentSessionState:
                 name=name,
                 tool_call_id=tool_call_id,
                 blocks=_tool_blocks(name, tool_call_id, content),
+                metadata=_initialize_message_metadata(
+                    role='tool',
+                    message_id=f'tool_{len(self.messages)}',
+                    metadata={'tool_name': name, 'tool_call_id': tool_call_id},
+                ),
             )
         )
 
@@ -278,7 +334,15 @@ class AgentSessionState:
                 blocks=(),
                 message_id=message_id,
                 state='streaming',
-                metadata=dict(metadata or {}),
+                metadata=_initialize_message_metadata(
+                    role='tool',
+                    message_id=message_id or f'tool_{len(self.messages)}',
+                    metadata={
+                        'tool_name': name,
+                        'tool_call_id': tool_call_id,
+                        **dict(metadata or {}),
+                    },
+                ),
             )
         )
         return len(self.messages) - 1
@@ -292,6 +356,14 @@ class AgentSessionState:
     ) -> None:
         message = self.messages[index]
         merged_metadata = dict(message.metadata)
+        merged_metadata = _record_mutation(
+            merged_metadata,
+            mutation_kind='tool_delta_append',
+            previous_content=message.content,
+            previous_state=message.state,
+            previous_stop_reason=message.stop_reason,
+        )
+        merged_metadata = _advance_lineage_revision(merged_metadata)
         if metadata:
             merged_metadata.update(metadata)
         self.messages[index] = replace(
@@ -320,6 +392,7 @@ class AgentSessionState:
                 previous_state=message.state,
                 previous_stop_reason=message.stop_reason,
             )
+            merged_metadata = _advance_lineage_revision(merged_metadata)
         if metadata:
             merged_metadata.update(metadata)
         self.messages[index] = replace(
@@ -358,6 +431,7 @@ class AgentSessionState:
                 previous_state=message.state,
                 previous_stop_reason=message.stop_reason,
             )
+            merged_metadata = _advance_lineage_revision(merged_metadata)
         if metadata:
             merged_metadata.update(metadata)
         self.messages[index] = replace(
@@ -471,7 +545,62 @@ def _record_mutation(
     metadata['mutations'] = mutations
     metadata['mutation_count'] = len(mutations)
     metadata['last_mutation_kind'] = mutation_kind
+    totals = metadata.get('mutation_totals')
+    if not isinstance(totals, dict):
+        totals = {}
+    else:
+        totals = {
+            str(key): int(value)
+            for key, value in totals.items()
+            if isinstance(key, str) and not isinstance(value, bool) and isinstance(value, int)
+        }
+    totals[mutation_kind] = totals.get(mutation_kind, 0) + 1
+    metadata['mutation_totals'] = totals
     return metadata
+
+
+def _initialize_message_metadata(
+    *,
+    role: str,
+    message_id: str | None,
+    metadata: JSONDict | None = None,
+) -> JSONDict:
+    merged = dict(metadata or {})
+    lineage_id = merged.get('lineage_id')
+    if not isinstance(lineage_id, str) or not lineage_id:
+        if isinstance(message_id, str) and message_id:
+            lineage_id = message_id
+        else:
+            lineage_id = f'{role}_lineage'
+    revision = merged.get('revision')
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        revision = 0
+    revision_count = merged.get('revision_count')
+    if isinstance(revision_count, bool) or not isinstance(revision_count, int):
+        revision_count = max(revision + 1, 1)
+    merged['lineage_id'] = lineage_id
+    merged['revision'] = revision
+    merged['revision_count'] = revision_count
+    merged.setdefault('message_role', role)
+    return merged
+
+
+def _advance_lineage_revision(metadata: JSONDict) -> JSONDict:
+    normalized = _initialize_message_metadata(
+        role=str(metadata.get('message_role', 'message')),
+        message_id=metadata.get('lineage_id') if isinstance(metadata.get('lineage_id'), str) else None,
+        metadata=metadata,
+    )
+    revision = normalized.get('revision', 0)
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        revision = 0
+    revision += 1
+    normalized['revision'] = revision
+    revision_count = normalized.get('revision_count', 1)
+    if isinstance(revision_count, bool) or not isinstance(revision_count, int):
+        revision_count = 1
+    normalized['revision_count'] = max(revision_count, revision + 1)
+    return normalized
 
 
 def _text_blocks(text: str) -> tuple[JSONDict, ...]:
