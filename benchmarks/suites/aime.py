@@ -84,20 +84,22 @@ class AIMEBenchmark(BenchmarkSuite):
     category = "math"
 
     def load_dataset(self) -> list[dict[str, Any]]:
-        jsonl_path = Path(self.data_dir) / "aime.jsonl"
-        if jsonl_path.exists():
-            problems: list[dict[str, Any]] = []
-            with open(jsonl_path) as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        problems.append(json.loads(line))
-            if self.verbose:
-                print(f"  Loaded {len(problems)} problems from {jsonl_path}")
-            return problems
+        # Prefer aime_2026.jsonl for AIME 2026 specific problems
+        for fname in ("aime_2026.jsonl", "aime.jsonl"):
+            jsonl_path = Path(self.data_dir) / fname
+            if jsonl_path.exists():
+                problems: list[dict[str, Any]] = []
+                with open(jsonl_path) as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line:
+                            problems.append(json.loads(line))
+                if self.verbose:
+                    print(f"  Loaded {len(problems)} problems from {jsonl_path}")
+                return problems
 
         if self.verbose:
-            print(f"  {jsonl_path} not found — using built-in 10-problem subset")
+            print("  No AIME data file found — using built-in 10-problem subset")
         return list(_BUILTIN_PROBLEMS)
 
     def build_prompt(self, problem: dict[str, Any]) -> str:

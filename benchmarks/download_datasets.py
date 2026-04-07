@@ -18,13 +18,20 @@ from typing import Any, Callable
 from benchmarks.suites.aider import _BUILTIN_PROBLEMS as _AIDER_BUILTINS
 from benchmarks.suites.aime import _BUILTIN_PROBLEMS as _AIME_BUILTINS
 from benchmarks.suites.bfcl import _BUILTIN_PROBLEMS as _BFCL_BUILTINS
+from benchmarks.suites.bigbench import _BUILTIN_PROBLEMS as _BIGBENCH_BUILTINS
+from benchmarks.suites.codeforces import _BUILTIN_PROBLEMS as _CODEFORCES_BUILTINS
+from benchmarks.suites.gpqa import _BUILTIN_PROBLEMS as _GPQA_BUILTINS
 from benchmarks.suites.gsm8k import _BUILTIN_PROBLEMS as _GSM8K_BUILTINS
+from benchmarks.suites.hle import _BUILTIN_PROBLEMS as _HLE_BUILTINS
 from benchmarks.suites.humaneval import _BUILTIN_PROBLEMS as _HUMANEVAL_BUILTINS
 from benchmarks.suites.ifeval import _BUILTIN_PROBLEMS as _IFEVAL_BUILTINS
 from benchmarks.suites.livecodebench import _BUILTIN_PROBLEMS as _LIVECODEBENCH_BUILTINS
 from benchmarks.suites.math_bench import _BUILTIN_PROBLEMS as _MATH_BUILTINS
 from benchmarks.suites.mbpp import _BUILTIN_PROBLEMS as _MBPP_BUILTINS
+from benchmarks.suites.mmmlu import _BUILTIN_PROBLEMS as _MMMLU_BUILTINS
+from benchmarks.suites.mmlu_pro import _BUILTIN_PROBLEMS as _MMLU_PRO_BUILTINS
 from benchmarks.suites.swe_bench import _BUILTIN_PROBLEMS as _SWE_BUILTINS
+from benchmarks.suites.tau2 import _BUILTIN_PROBLEMS as _TAU2_BUILTINS
 
 
 HF_DATASET_VIEWER_BASE = "https://datasets-server.huggingface.co"
@@ -254,6 +261,157 @@ def _download_math(
     return DownloadResult("math", count, str(output_path), "official")
 
 
+def _download_mmlu_pro(
+    output_path: Path,
+    *,
+    timeout: float,
+    json_fetcher: JsonFetcher = fetch_json,
+) -> DownloadResult:
+    rows = _fetch_hf_rows(
+        "TIGER-Lab/MMLU-Pro",
+        config_preference=("default",),
+        split_preference=("test", "validation"),
+        json_fetcher=json_fetcher,
+        timeout=timeout,
+    )
+    letters = "ABCDEFGHIJ"
+    normalized = [
+        {
+            "id": f"mmlu-pro-{index + 1:04d}",
+            "subject": row.get("category", row.get("subject", "unknown")),
+            "question": row.get("question", ""),
+            "choices": row.get("options", row.get("choices", [])),
+            "answer": letters[row["answer"]] if isinstance(row.get("answer"), int) else str(row.get("answer", "")),
+        }
+        for index, row in enumerate(rows)
+    ]
+    count = _write_jsonl(output_path, normalized)
+    return DownloadResult("mmlu-pro", count, str(output_path), "official")
+
+
+def _download_gpqa(
+    output_path: Path,
+    *,
+    timeout: float,
+    json_fetcher: JsonFetcher = fetch_json,
+) -> DownloadResult:
+    rows = _fetch_hf_rows(
+        "Idavidrein/gpqa",
+        config_preference=("gpqa_diamond",),
+        split_preference=("train",),
+        json_fetcher=json_fetcher,
+        timeout=timeout,
+    )
+    normalized = []
+    for index, row in enumerate(rows):
+        choices = [
+            row.get("Correct Answer", ""),
+            row.get("Incorrect Answer 1", ""),
+            row.get("Incorrect Answer 2", ""),
+            row.get("Incorrect Answer 3", ""),
+        ]
+        normalized.append({
+            "id": f"gpqa-{index + 1:04d}",
+            "subject": row.get("Subdomain", row.get("domain", "science")),
+            "question": row.get("Question", ""),
+            "choices": choices,
+            "answer": "A",  # Correct answer is always first; shuffle at eval time if needed
+        })
+    count = _write_jsonl(output_path, normalized)
+    return DownloadResult("gpqa-diamond", count, str(output_path), "official")
+
+
+def _download_bigbench_hard(
+    output_path: Path,
+    *,
+    timeout: float,
+    json_fetcher: JsonFetcher = fetch_json,
+) -> DownloadResult:
+    rows = _fetch_hf_rows(
+        "maveriq/bigbenchhard",
+        config_preference=("default",),
+        split_preference=("train",),
+        json_fetcher=json_fetcher,
+        timeout=timeout,
+    )
+    letters = "ABCDEFGHIJ"
+    normalized = []
+    for index, row in enumerate(rows):
+        choices = row.get("choices", row.get("multiple_choice_targets", []))
+        answer = row.get("answer", row.get("target", ""))
+        if isinstance(answer, int) and answer < len(letters):
+            answer = letters[answer]
+        normalized.append({
+            "id": f"bbh-{index + 1:04d}",
+            "task": row.get("task", row.get("subject", "unknown")),
+            "question": row.get("input", row.get("question", "")),
+            "choices": choices,
+            "answer": str(answer),
+        })
+    count = _write_jsonl(output_path, normalized)
+    return DownloadResult("bigbench-hard", count, str(output_path), "official")
+
+
+def _download_mmmlu(
+    output_path: Path,
+    *,
+    timeout: float,
+    json_fetcher: JsonFetcher = fetch_json,
+) -> DownloadResult:
+    rows = _fetch_hf_rows(
+        "openai/MMMLU",
+        config_preference=("default",),
+        split_preference=("test", "validation"),
+        json_fetcher=json_fetcher,
+        timeout=timeout,
+    )
+    letters = "ABCD"
+    normalized = [
+        {
+            "id": f"mmmlu-{index + 1:04d}",
+            "language": row.get("language", "en"),
+            "subject": row.get("subject", "unknown"),
+            "question": row.get("question", ""),
+            "choices": row.get("choices", row.get("options", [])),
+            "answer": letters[row["answer"]] if isinstance(row.get("answer"), int) else str(row.get("answer", "")),
+        }
+        for index, row in enumerate(rows)
+    ]
+    count = _write_jsonl(output_path, normalized)
+    return DownloadResult("mmmlu", count, str(output_path), "official")
+
+
+def _download_hle(
+    output_path: Path,
+    *,
+    timeout: float,
+    json_fetcher: JsonFetcher = fetch_json,
+) -> DownloadResult:
+    rows = _fetch_hf_rows(
+        "cais/hle",
+        config_preference=("default",),
+        split_preference=("test", "validation", "train"),
+        json_fetcher=json_fetcher,
+        timeout=timeout,
+    )
+    normalized = []
+    for index, row in enumerate(rows):
+        entry: dict[str, Any] = {
+            "id": f"hle-{index + 1:04d}",
+            "subject": row.get("category", row.get("subject", "general")),
+            "question": row.get("question", ""),
+            "answer": str(row.get("answer", "")),
+        }
+        if row.get("choices") or row.get("options"):
+            entry["answer_type"] = "multiple_choice"
+            entry["choices"] = row.get("choices", row.get("options", []))
+        else:
+            entry["answer_type"] = "exact"
+        normalized.append(entry)
+    count = _write_jsonl(output_path, normalized)
+    return DownloadResult("hle", count, str(output_path), "official")
+
+
 def _export_builtin(output_path: Path, suite: str, rows: list[dict[str, Any]], *, source: str = "builtin", note: str = "") -> DownloadResult:
     count = _write_jsonl(output_path, rows)
     return DownloadResult(suite, count, str(output_path), source, note)
@@ -271,6 +429,13 @@ def _builtin_rows(suite: str) -> list[dict[str, Any]]:
         "aime": list(_AIME_BUILTINS),
         "ifeval": list(_IFEVAL_BUILTINS),
         "bfcl": list(_BFCL_BUILTINS),
+        "mmlu-pro": list(_MMLU_PRO_BUILTINS),
+        "gpqa-diamond": list(_GPQA_BUILTINS),
+        "bigbench-hard": list(_BIGBENCH_BUILTINS),
+        "mmmlu": list(_MMMLU_BUILTINS),
+        "hle": list(_HLE_BUILTINS),
+        "tau2": list(_TAU2_BUILTINS),
+        "codeforces": list(_CODEFORCES_BUILTINS),
     }
     return list(mapping[suite])
 
@@ -284,19 +449,33 @@ def prepare_suite(
     official_only: bool,
     timeout: float,
 ) -> DownloadResult:
-    output_path = data_dir / f"{suite}.jsonl"
+    output_map = {
+        "mmlu-pro": "mmlu_pro.jsonl",
+        "gpqa-diamond": "gpqa.jsonl",
+        "bigbench-hard": "bigbench_hard.jsonl",
+        "mmmlu": "mmmlu.jsonl",
+        "hle": "hle.jsonl",
+        "tau2": "tau2.jsonl",
+        "codeforces": "codeforces.jsonl",
+    }
+    output_path = data_dir / output_map.get(suite, f"{suite}.jsonl")
     if output_path.exists() and not force:
         lines = [line for line in output_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         return DownloadResult(suite, len(lines), str(output_path), "existing")
 
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    builtin_only_suites = {"swe-bench", "aider", "livecodebench", "aime", "ifeval", "bfcl"}
+    builtin_only_suites = {"swe-bench", "aider", "livecodebench", "aime", "ifeval", "bfcl", "tau2", "codeforces"}
     official_downloaders = {
         "humaneval": _download_humaneval,
         "gsm8k": _download_gsm8k,
         "mbpp": _download_mbpp,
         "math": _download_math,
+        "mmlu-pro": _download_mmlu_pro,
+        "gpqa-diamond": _download_gpqa,
+        "bigbench-hard": _download_bigbench_hard,
+        "mmmlu": _download_mmmlu,
+        "hle": _download_hle,
     }
 
     if suite in builtin_only_suites or builtin_only:
@@ -358,6 +537,13 @@ def main() -> None:
         "aime",
         "ifeval",
         "bfcl",
+        "mmlu-pro",
+        "gpqa-diamond",
+        "bigbench-hard",
+        "mmmlu",
+        "hle",
+        "tau2",
+        "codeforces",
     ]
 
     if args.list:

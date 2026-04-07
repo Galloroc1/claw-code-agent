@@ -55,6 +55,13 @@ from benchmarks.suites.gsm8k import GSM8KBenchmark
 from benchmarks.suites.aime import AIMEBenchmark
 from benchmarks.suites.ifeval import IFEvalBenchmark
 from benchmarks.suites.bfcl import BFCLBenchmark
+from benchmarks.suites.mmlu_pro import MMLUProBenchmark
+from benchmarks.suites.gpqa import GPQABenchmark
+from benchmarks.suites.bigbench import BigBenchHardBenchmark
+from benchmarks.suites.mmmlu import MMMMLUBenchmark
+from benchmarks.suites.hle import HLEBenchmark
+from benchmarks.suites.tau2 import Tau2Benchmark
+from benchmarks.suites.codeforces import CodeforcesBenchmark
 
 
 # ---------------------------------------------------------------------------
@@ -72,12 +79,21 @@ SUITE_REGISTRY: dict[str, type[BenchmarkSuite]] = {
     "aime": AIMEBenchmark,
     "ifeval": IFEvalBenchmark,
     "bfcl": BFCLBenchmark,
+    "mmlu-pro": MMLUProBenchmark,
+    "gpqa-diamond": GPQABenchmark,
+    "bigbench-hard": BigBenchHardBenchmark,
+    "mmmlu": MMMMLUBenchmark,
+    "hle": HLEBenchmark,
+    "tau2": Tau2Benchmark,
+    "codeforces": CodeforcesBenchmark,
 }
 
 CATEGORY_MAP: dict[str, list[str]] = {
-    "coding": ["humaneval", "mbpp", "swe-bench", "aider", "livecodebench"],
+    "coding": ["humaneval", "mbpp", "swe-bench", "aider", "livecodebench", "codeforces"],
     "math": ["math", "gsm8k", "aime"],
     "instruction-following": ["ifeval", "bfcl"],
+    "knowledge": ["mmlu-pro", "gpqa-diamond", "mmmlu", "hle"],
+    "reasoning": ["bigbench-hard", "tau2"],
 }
 
 
@@ -175,8 +191,8 @@ def main() -> None:
             "  python3 -m benchmarks.run_suite --all -o results.json\n"
         ),
     )
-    parser.add_argument("--suite", choices=list(SUITE_REGISTRY.keys()),
-                        help="Run a specific benchmark suite")
+    parser.add_argument("--suite", action="append", default=[],
+                        help="Run a specific benchmark suite (can be repeated)")
     parser.add_argument("--category", choices=list(CATEGORY_MAP.keys()),
                         help="Run all suites in a category")
     parser.add_argument("--all", action="store_true",
@@ -221,7 +237,11 @@ def main() -> None:
     elif args.category:
         suite_names = CATEGORY_MAP.get(args.category, [])
     elif args.suite:
-        suite_names = [args.suite]
+        for s in args.suite:
+            if s not in SUITE_REGISTRY:
+                print(f"Error: unknown suite '{s}'. Available: {', '.join(SUITE_REGISTRY)}")
+                sys.exit(1)
+        suite_names = list(args.suite)
     else:
         parser.print_help()
         print("\nError: specify --suite, --category, or --all")

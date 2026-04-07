@@ -37,11 +37,18 @@ python3 -m benchmarks.run_suite --all -o results.json
 | **SWE-Bench** | Coding | 5 | Resolve real-world GitHub issues |
 | **Aider** | Coding | 6 | Code editing and refactoring tasks |
 | **LiveCodeBench** | Coding | 5 | Competitive programming problems |
+| **Codeforces** | Coding | 10 | Competitive programming with ELO rating |
 | **MATH** | Math | 15 | Competition mathematics problems |
 | **GSM8K** | Math | 15 | Grade school math word problems |
 | **AIME** | Math | 10 | Challenging competition math (integers 0–999) |
 | **IFEval** | Instruction Following | 10 | Verifiable instruction-following evaluation |
 | **BFCL** | Instruction Following | 7 | Function/tool calling evaluation |
+| **MMLU-Pro** | Knowledge | 10 | Professional-level multiple-choice QA (10 choices) |
+| **GPQA-Diamond** | Knowledge | 10 | Graduate-level science QA (diamond difficulty) |
+| **MMMLU** | Knowledge | 10 | Multilingual MMLU across languages |
+| **HLE** | Knowledge | 10 | Humanity's Last Exam (extremely hard) |
+| **BigBench-Hard** | Reasoning | 10 | BIG-Bench Extra Hard reasoning tasks |
+| **Tau2** | Reasoning | 10 | Tool-augmented reasoning (retail/airline/finance) |
 
 ### Commands
 
@@ -60,11 +67,22 @@ python3 -m benchmarks.run_suite --suite mbpp
 python3 -m benchmarks.run_suite --suite swe-bench
 python3 -m benchmarks.run_suite --suite aider
 python3 -m benchmarks.run_suite --suite livecodebench
+python3 -m benchmarks.run_suite --suite codeforces
 
 # Math benchmarks
 python3 -m benchmarks.run_suite --suite math
 python3 -m benchmarks.run_suite --suite gsm8k
 python3 -m benchmarks.run_suite --suite aime
+
+# Knowledge benchmarks
+python3 -m benchmarks.run_suite --suite mmlu-pro
+python3 -m benchmarks.run_suite --suite gpqa-diamond
+python3 -m benchmarks.run_suite --suite mmmlu
+python3 -m benchmarks.run_suite --suite hle
+
+# Reasoning benchmarks
+python3 -m benchmarks.run_suite --suite bigbench-hard
+python3 -m benchmarks.run_suite --suite tau2
 
 # Instruction following benchmarks
 python3 -m benchmarks.run_suite --suite ifeval
@@ -74,13 +92,19 @@ python3 -m benchmarks.run_suite --suite bfcl
 #### Run by Category
 
 ```bash
-# All coding benchmarks (~51 problems)
+# All coding benchmarks
 python3 -m benchmarks.run_suite --category coding
 
-# All math benchmarks (~40 problems)
+# All math benchmarks
 python3 -m benchmarks.run_suite --category math
 
-# All instruction following benchmarks (~17 problems)
+# All knowledge benchmarks (MMLU-Pro, GPQA, MMMLU, HLE)
+python3 -m benchmarks.run_suite --category knowledge
+
+# All reasoning benchmarks (BigBench-Hard, Tau2)
+python3 -m benchmarks.run_suite --category reasoning
+
+# All instruction following benchmarks
 python3 -m benchmarks.run_suite --category instruction-following
 ```
 
@@ -143,41 +167,40 @@ Each suite looks for a JSONL file in the data directory. If the file isn't found
 | SWE-Bench | `swe_bench.jsonl` | `{"instance_id", "problem_statement", "setup_code", "test_cmd"}` |
 | Aider | `aider.jsonl` | `{"id", "instruction", "setup_code", "test_code"}` |
 | LiveCodeBench | `livecodebench.jsonl` | `{"id", "title", "description", "test_cases", "function_name"}` |
+| Codeforces | `codeforces.jsonl` | `{"id", "rating", "title", "problem", "test_cases"}` |
 | MATH | `math.jsonl` | `{"id", "problem", "answer", "subject", "level"}` |
 | GSM8K | `gsm8k.jsonl` | `{"id", "question", "answer"}` |
-| AIME | `aime.jsonl` | `{"id", "problem", "answer"}` |
+| AIME | `aime.jsonl` or `aime_2026.jsonl` | `{"id", "problem", "answer"}` |
 | IFEval | `ifeval.jsonl` | `{"id", "instruction", "checks"}` |
 | BFCL | `bfcl.jsonl` | `{"id", "instruction", "expected_function", "setup_code", "test_code"}` |
+| MMLU-Pro | `mmlu_pro.jsonl` | `{"id", "subject", "question", "choices", "answer"}` |
+| GPQA-Diamond | `gpqa.jsonl` | `{"id", "subject", "question", "choices", "answer"}` |
+| MMMLU | `mmmlu.jsonl` | `{"id", "language", "subject", "question", "choices", "answer"}` |
+| HLE | `hle.jsonl` | `{"id", "subject", "question", "answer", "answer_type"}` |
+| BigBench-Hard | `bigbench_hard.jsonl` | `{"id", "task", "question", "choices", "answer"}` |
+| Tau2 | `tau2.jsonl` | `{"id", "domain", "question", "choices", "answer"}` |
 
 ### Downloading Full Datasets
 
 ```bash
-# HumanEval (from OpenAI)
-wget -O benchmarks/data/humaneval.jsonl \
-  https://raw.githubusercontent.com/openai/human-eval/master/data/HumanEval.jsonl.gz
-gunzip benchmarks/data/humaneval.jsonl.gz
+# Download all datasets (builtin + official where available)
+python3 -m benchmarks.download_datasets --all
 
-# GSM8K (from HuggingFace — requires datasets library)
-pip install datasets
-python3 -c "
-from datasets import load_dataset
-import json
-ds = load_dataset('gsm8k', 'main', split='test')
-with open('benchmarks/data/gsm8k.jsonl', 'w') as f:
-    for i, item in enumerate(ds):
-        f.write(json.dumps({'id': f'gsm8k-{i}', 'question': item['question'], 'answer': item['answer'].split('####')[-1].strip()}) + '\n')
-"
+# Download builtin-only (no network, uses embedded problems)
+python3 -m benchmarks.download_datasets --all --builtin-only
 
-# MATH (from HuggingFace)
-python3 -c "
-from datasets import load_dataset
-import json
-ds = load_dataset('hendrycks/competition_math', split='test')
-with open('benchmarks/data/math.jsonl', 'w') as f:
-    for i, item in enumerate(ds):
-        f.write(json.dumps({'id': f'math-{i}', 'problem': item['problem'], 'answer': item['solution'], 'subject': item['type'], 'level': item['level']}) + '\n')
-"
+# Download specific suites
+python3 -m benchmarks.download_datasets --suite humaneval --suite mmlu-pro --suite gpqa-diamond
+
+# Force re-download
+python3 -m benchmarks.download_datasets --all --force
 ```
+
+**Datasets with HuggingFace downloaders:**
+HumanEval, GSM8K, MBPP, MATH, MMLU-Pro, GPQA-Diamond, BigBench-Hard, MMMLU, HLE
+
+**Builtin-only datasets (no HuggingFace source):**
+SWE-Bench, Aider, LiveCodeBench, AIME, IFEval, BFCL, Tau2, Codeforces
 
 ---
 
@@ -221,16 +244,25 @@ python3 -m benchmarks.run_suite --suite mbpp               # Coding: basic Pytho
 python3 -m benchmarks.run_suite --suite swe-bench          # Coding: GitHub issues
 python3 -m benchmarks.run_suite --suite aider              # Coding: code editing
 python3 -m benchmarks.run_suite --suite livecodebench      # Coding: competitive programming
+python3 -m benchmarks.run_suite --suite codeforces         # Coding: competitive + ELO
 python3 -m benchmarks.run_suite --suite math               # Math: competition math
 python3 -m benchmarks.run_suite --suite gsm8k              # Math: grade school
 python3 -m benchmarks.run_suite --suite aime               # Math: AIME competition
+python3 -m benchmarks.run_suite --suite mmlu-pro           # Knowledge: 14 subjects, 10 choices
+python3 -m benchmarks.run_suite --suite gpqa-diamond       # Knowledge: graduate science
+python3 -m benchmarks.run_suite --suite mmmlu              # Knowledge: multilingual MMLU
+python3 -m benchmarks.run_suite --suite hle                # Knowledge: Humanity's Last Exam
+python3 -m benchmarks.run_suite --suite bigbench-hard      # Reasoning: BIG-Bench Hard
+python3 -m benchmarks.run_suite --suite tau2               # Reasoning: tool-augmented
 python3 -m benchmarks.run_suite --suite ifeval             # Instruction: format following
 python3 -m benchmarks.run_suite --suite bfcl               # Instruction: function calling
 
 # Category runs
-python3 -m benchmarks.run_suite --category coding                  # All coding (~51 problems)
-python3 -m benchmarks.run_suite --category math                    # All math (~40 problems)
-python3 -m benchmarks.run_suite --category instruction-following   # All IF (~17 problems)
+python3 -m benchmarks.run_suite --category coding                  # All coding
+python3 -m benchmarks.run_suite --category math                    # All math
+python3 -m benchmarks.run_suite --category knowledge               # MMLU-Pro, GPQA, MMMLU, HLE
+python3 -m benchmarks.run_suite --category reasoning               # BigBench, Tau2
+python3 -m benchmarks.run_suite --category instruction-following   # IFEval, BFCL
 
 # Full run
 python3 -m benchmarks.run_suite --all                              # All suites (~108 problems)
@@ -311,6 +343,7 @@ benchmarks/
 ├── __init__.py
 ├── run.py                  # Local task benchmark runner
 ├── run_suite.py            # Standard evaluation suite runner (CLI)
+├── download_datasets.py    # Dataset downloader (HuggingFace + builtins)
 ├── README.md               # This file
 ├── data/                   # Dataset files (JSONL) — not committed
 │   └── .gitkeep
@@ -325,9 +358,16 @@ benchmarks/
     ├── swe_bench.py        # SWE-Bench benchmark
     ├── aider.py            # Aider benchmark
     ├── livecodebench.py    # LiveCodeBench benchmark
+    ├── codeforces.py       # Codeforces (ELO scoring)
     ├── math_bench.py       # MATH benchmark
     ├── gsm8k.py            # GSM8K benchmark
     ├── aime.py             # AIME benchmark
+    ├── mmlu_pro.py         # MMLU-Pro (10-choice QA)
+    ├── gpqa.py             # GPQA Diamond (science)
+    ├── mmmlu.py            # MMMLU (multilingual)
+    ├── hle.py              # HLE (Humanity's Last Exam)
+    ├── bigbench.py         # BigBench Extra Hard
+    ├── tau2.py             # Tau2 (tool-augmented)
     ├── ifeval.py           # IFEval benchmark
     └── bfcl.py             # BFCL benchmark
 ```
