@@ -369,6 +369,46 @@ def get_slash_command_specs() -> tuple[SlashCommandSpec, ...]:
             description='Diagnose and verify the claw-code installation and settings.',
             handler=_handle_doctor,
         ),
+        SlashCommandSpec(
+            names=('commit',),
+            description='Create a git commit.',
+            handler=_handle_commit,
+        ),
+        SlashCommandSpec(
+            names=('pr-comments', 'pr_comments'),
+            description='Get comments from a GitHub pull request.',
+            handler=_handle_pr_comments,
+        ),
+        SlashCommandSpec(
+            names=('resume', 'continue'),
+            description='Resume a previous conversation.',
+            handler=_handle_resume,
+        ),
+        SlashCommandSpec(
+            names=('add-dir',),
+            description='Add a new working directory.',
+            handler=_handle_add_dir,
+        ),
+        SlashCommandSpec(
+            names=('skills',),
+            description='List available skills.',
+            handler=_handle_skills,
+        ),
+        SlashCommandSpec(
+            names=('fast',),
+            description='Toggle fast mode.',
+            handler=_handle_fast,
+        ),
+        SlashCommandSpec(
+            names=('vim',),
+            description='Toggle between Vim and Normal editing modes.',
+            handler=_handle_vim,
+        ),
+        SlashCommandSpec(
+            names=('rewind', 'checkpoint'),
+            description='Restore the conversation to a previous point.',
+            handler=_handle_rewind,
+        ),
     )
 
 
@@ -1183,6 +1223,286 @@ def _handle_doctor(agent: 'LocalCodingAgent', _args: str, input_text: str) -> Sl
 
     output = '## Doctor Report\n\n' + '\n'.join(checks)
     return _local_result(input_text, output)
+
+
+def _handle_commit(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Create a git commit — prompt-type command injecting git context."""
+    import subprocess
+
+    cwd = str(agent.runtime_config.cwd)
+
+    def _git(cmd_args: list[str]) -> str:
+        try:
+            proc = subprocess.run(
+                ['git'] + cmd_args,
+                cwd=cwd, capture_output=True, text=True, timeout=15,
+            )
+            return proc.stdout.strip()
+        except Exception:
+            return ''
+
+    status = _git(['status', '--short'])
+    staged = _git(['diff', '--staged'])
+    unstaged = _git(['diff'])
+    branch = _git(['branch', '--show-current'])
+    recent = _git(['log', '--oneline', '-10'])
+
+    sections: list[str] = []
+    if branch:
+        sections.append(f'Current branch: {branch}')
+    if status:
+        sections.append(f'### Status\n```\n{status}\n```')
+    if staged:
+        sections.append(f'### Staged diff\n```\n{staged}\n```')
+    if unstaged:
+        sections.append(f'### Unstaged diff\n```\n{unstaged}\n```')
+    if recent:
+        sections.append(f'### Recent commits\n```\n{recent}\n```')
+
+    git_context = '\n\n'.join(sections) if sections else 'No git changes detected.'
+
+    prompt = f"""Create a git commit for the current changes.
+
+{git_context}
+
+Instructions:
+1. Review the changes above
+2. Stage appropriate files with `git add <file>` (prefer specific files over `git add -A`)
+3. Draft a concise commit message following the repo's conventions
+4. Use a HEREDOC for multi-line messages:
+   git commit -m "$(cat <<'EOF'
+   message here
+   EOF
+   )"
+
+Safety:
+- Always create NEW commits (never --amend)
+- Never skip hooks (--no-verify)
+- Never commit secrets (.env, credentials, etc.)
+- No interactive flags (-i)"""
+
+    if args.strip():
+        prompt += f'\n\nAdditional instructions: {args.strip()}'
+
+    return _prompt_result(input_text, prompt)
+
+
+def _handle_pr_comments(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Fetch PR comments — prompt-type command using gh CLI."""
+    pr_ref = args.strip()
+
+    prompt = f"""Fetch and summarize comments from a GitHub pull request.
+
+{f'PR reference: {pr_ref}' if pr_ref else 'Find the current PR for this branch.'}
+
+Steps:
+1. Get PR info: `gh pr view {pr_ref or ''} --json number,headRefName,headRepository`
+2. Fetch PR-level comments: `gh api /repos/{{owner}}/{{repo}}/issues/{{number}}/comments --jq '.[] | {{body, user: .user.login, created_at}}'`
+3. Fetch review comments: `gh api /repos/{{owner}}/{{repo}}/pulls/{{number}}/comments --jq '.[] | {{body, path, line, diff_hunk, user: .user.login}}'`
+4. Present all comments with file/line context
+5. Do not add explanatory text — just show the comments"""
+
+    return _prompt_result(input_text, prompt)
+
+
+def _handle_resume(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Resume a previous conversation."""
+    import json as _json
+
+    session_dir = agent.runtime_config.session_directory
+    if not session_dir.exists():
+        return _local_result(input_text, 'No session directory found.')
+
+    search_term = args.strip()
+
+    # If a session ID is provided, show its info
+    if search_term:
+        session_path = session_dir / f'{search_term}.json'
+        if session_path.exists():
+            try:
+                data = _json.loads(session_path.read_text(encoding='utf-8'))
+                msg_count = len(data.get('messages', []))
+                return _local_result(
+                    input_text,
+                    f'Found session `{search_term}` with {msg_count} messages.\n'
+                    f'To resume, restart with: `--resume {search_term}`',
+                )
+            except Exception as exc:
+                return _local_result(input_text, f'Error reading session: {exc}')
+
+    # List recent sessions
+    session_files = sorted(
+        session_dir.glob('*.json'),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:20]
+
+    if not session_files:
+        return _local_result(input_text, 'No previous sessions found.')
+
+    lines = ['## Recent Sessions', '']
+    for sf in session_files:
+        try:
+            data = _json.loads(sf.read_text(encoding='utf-8'))
+            sid = sf.stem
+            msg_count = len(data.get('messages', []))
+            model = data.get('model', 'unknown')
+            first_user = ''
+            for msg in data.get('messages', []):
+                if msg.get('role') == 'user' and msg.get('content', '').strip():
+                    first_user = msg['content'].strip()[:80]
+                    if len(msg['content'].strip()) > 80:
+                        first_user += '...'
+                    break
+            line = f'- `{sid}` ({msg_count} msgs, {model})'
+            if first_user:
+                line += f': {first_user}'
+            lines.append(line)
+        except Exception:
+            lines.append(f'- `{sf.stem}` (error reading)')
+
+    if search_term:
+        # Filter by search term
+        filtered = [
+            l for l in lines
+            if search_term.lower() in l.lower() or l.startswith('#')
+        ]
+        if len(filtered) <= 2:
+            filtered.append(f'\nNo sessions matching "{search_term}".')
+        lines = filtered
+
+    lines.append('\nTo resume: restart with `--resume <session-id>`')
+    return _local_result(input_text, '\n'.join(lines))
+
+
+def _handle_add_dir(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Add a new working directory."""
+    from pathlib import Path as _Path
+
+    path_str = args.strip()
+    if not path_str:
+        return _local_result(input_text, 'Usage: /add-dir <path>')
+
+    path = _Path(path_str).resolve()
+
+    if not path.exists():
+        return _local_result(input_text, f'Path not found: {path}')
+    if not path.is_dir():
+        return _local_result(input_text, f'Not a directory: {path}')
+
+    cwd = agent.runtime_config.cwd
+    if path == cwd or str(path).startswith(str(cwd) + '/'):
+        return _local_result(
+            input_text,
+            f'Path is already within the working directory: {cwd}',
+        )
+
+    if not hasattr(agent, '_additional_directories'):
+        agent._additional_directories = []
+    if path in agent._additional_directories:
+        return _local_result(input_text, f'Directory already added: {path}')
+
+    agent._additional_directories.append(path)
+    return _local_result(
+        input_text,
+        f'Added working directory: {path}\n'
+        f'Tools can now access files in this directory.',
+    )
+
+
+def _handle_skills(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:
+    """List available skills."""
+    lines = ['## Available Skills', '']
+    for spec in get_slash_command_specs():
+        primary = f'/{spec.names[0]}'
+        lines.append(f'- `{primary}`: {spec.description}')
+    lines.extend(['', 'Use the Skill tool to invoke skills programmatically.'])
+    return _local_result(input_text, '\n'.join(lines))
+
+
+def _handle_fast(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Toggle fast mode."""
+    arg = args.strip().lower()
+    current = getattr(agent, '_fast_mode', False)
+
+    if arg == 'on':
+        agent._fast_mode = True
+        return _local_result(input_text, 'Fast mode enabled.')
+    if arg == 'off':
+        agent._fast_mode = False
+        return _local_result(input_text, 'Fast mode disabled.')
+    if not arg:
+        agent._fast_mode = not current
+        state = 'enabled' if agent._fast_mode else 'disabled'
+        return _local_result(input_text, f'Fast mode {state}.')
+    return _local_result(input_text, 'Usage: /fast [on|off]')
+
+
+def _handle_vim(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:
+    """Toggle between Vim and Normal editing modes."""
+    current = getattr(agent, '_editor_mode', 'normal')
+    if current == 'emacs':
+        current = 'normal'
+
+    new_mode = 'vim' if current == 'normal' else 'normal'
+    agent._editor_mode = new_mode
+
+    if new_mode == 'vim':
+        hint = 'Use Escape key to toggle between INSERT and NORMAL modes.'
+    else:
+        hint = 'Using standard (readline) keyboard bindings.'
+
+    return _local_result(input_text, f'Switched to {new_mode} mode. {hint}')
+
+
+def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Rewind conversation to a previous message."""
+    session = agent.last_session
+    if session is None:
+        return _local_result(input_text, 'No active session.')
+
+    n_str = args.strip()
+
+    if not n_str:
+        msgs = session.messages
+        lines = ['## Conversation History', '']
+        for i, msg in enumerate(msgs):
+            role = msg.role.upper()
+            preview = msg.content[:60].replace('\n', ' ')
+            if len(msg.content) > 60:
+                preview += '...'
+            lines.append(f'  {i}: [{role}] {preview}')
+        lines.append('')
+        lines.append('Usage: /rewind <message-number> to truncate to that point.')
+        return _local_result(input_text, '\n'.join(lines))
+
+    try:
+        target = int(n_str)
+    except ValueError:
+        return _local_result(input_text, 'Usage: /rewind <message-number>')
+
+    if target < 0 or target >= len(session.messages):
+        return _local_result(
+            input_text,
+            f'Invalid message number. Valid range: 0-{len(session.messages) - 1}',
+        )
+
+    removed_count = len(session.messages) - target - 1
+    session.messages[:] = session.messages[:target + 1]
+    return _local_result(
+        input_text,
+        f'Rewound conversation to message {target}. Removed {removed_count} messages.',
+    )
+
+
+def _prompt_result(input_text: str, prompt: str) -> SlashCommandResult:
+    """Return a prompt-type result — the prompt gets sent to the model."""
+    return SlashCommandResult(
+        handled=True,
+        should_query=True,
+        prompt=prompt,
+        transcript=({'role': 'user', 'content': input_text},),
+    )
 
 
 def _local_result(input_text: str, output: str) -> SlashCommandResult:

@@ -447,15 +447,19 @@ def compact_conversation(
     agent: 'LocalCodingAgent',
     custom_instructions: str | None = None,
 ) -> CompactionResult:
-    """Perform an LLM-backed conversation compaction.
+    """Perform conversation compaction.
 
-    1. Build the compact prompt (9-section template).
-    2. Collect the session messages to summarise.
-    3. Send them + the compact prompt to the model.
-    4. On prompt-too-long, retry by dropping oldest API-round groups
+    Tries session-memory-based compaction first (free, no API call),
+    then falls back to LLM-backed compaction.
+
+    1. If no custom instructions, try session memory compact.
+    2. Otherwise, build the compact prompt (9-section template).
+    3. Collect the session messages to summarise.
+    4. Send them + the compact prompt to the model.
+    5. On prompt-too-long, retry by dropping oldest API-round groups
        (up to ``MAX_PTL_RETRIES`` attempts).
-    5. Parse ``<summary>`` from the response.
-    6. Replace session messages with:
+    6. Parse ``<summary>`` from the response.
+    7. Replace session messages with:
        boundary marker → summary user message → preserved tail.
 
     Returns a :class:`CompactionResult` with diagnostics.
@@ -466,6 +470,34 @@ def compact_conversation(
             boundary_message=_build_boundary('No session to compact.'),
             error=ERROR_NOT_ENOUGH_MESSAGES,
         )
+
+    # --- Try session-memory-based compact first (no API call) ---
+    if custom_instructions is None:
+        from .session_memory_compact import try_session_memory_compaction
+
+        last_summarized_id = getattr(agent, '_last_summarized_message_id', None)
+        sm_result = try_session_memory_compaction(
+            messages=list(session.messages),
+            model=agent.model_config.model,
+            last_summarized_message_id=last_summarized_id,
+        )
+        if sm_result is not None:
+            # Apply the session-memory compaction to the session
+            prefix_count = 0
+            for msg in session.messages:
+                if msg.metadata.get('kind') == 'compact_boundary':
+                    prefix_count += 1
+                else:
+                    break
+            session.messages = (
+                session.messages[:prefix_count]
+                + [sm_result.boundary_message]
+                + sm_result.summary_messages
+                + sm_result.messages_to_keep
+            )
+            # Reset the summarized ID
+            agent._last_summarized_message_id = None
+            return sm_result
 
     # ---- Determine which messages to compact vs preserve ----
     preserve_count = max(
