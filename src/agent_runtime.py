@@ -65,6 +65,15 @@ from .session_store import (
     usage_from_payload,
 )
 from .token_budget import calculate_token_budget, format_token_budget
+from .builtin_agents import (
+    AgentDefinition,
+    get_agent_definition,
+    get_builtin_agents,
+    format_agent_listing,
+    ALL_AGENT_DISALLOWED_TOOLS,
+    GENERAL_PURPOSE_AGENT,
+)
+from .microcompact import microcompact_messages as _microcompact_messages
 
 
 @dataclass(frozen=True)
@@ -113,6 +122,7 @@ class LocalCodingAgent:
     last_run_result: AgentRunResult | None = field(default=None, init=False, repr=False)
     cumulative_usage: UsageStats = field(default_factory=UsageStats, init=False, repr=False)
     cumulative_cost_usd: float = field(default=0.0, init=False, repr=False)
+    _compact_consecutive_failures: int = field(default=0, init=False, repr=False)
     active_session_id: str | None = field(default=None, init=False, repr=False)
     last_session_path: str | None = field(default=None, init=False, repr=False)
     managed_agent_id: str | None = field(default=None, init=False, repr=False)
@@ -465,7 +475,7 @@ class LocalCodingAgent:
         stream_events: list[dict[str, object]] = []
         assistant_response_segments: list[str] = []
         delegated_tasks = sum(
-            1 for entry in file_history if entry.get('action') == 'delegate_agent'
+            1 for entry in file_history if entry.get('action') in ('delegate_agent', 'Agent')
         )
         model_calls = starting_model_calls
 
@@ -497,6 +507,11 @@ class LocalCodingAgent:
             return result
 
         for turn_index in range(1, self.runtime_config.max_turns + 1):
+            self._microcompact_session_if_needed(
+                session,
+                stream_events,
+                turn_index=turn_index,
+            )
             self._snip_session_if_needed(
                 session,
                 stream_events,
@@ -775,7 +790,7 @@ class LocalCodingAgent:
             for tool_call in turn.tool_calls:
                 assistant_response_segments.clear()
                 tool_calls += 1
-                if tool_call.name == 'delegate_agent':
+                if tool_call.name in ('Agent', 'delegate_agent'):
                     delegated_tasks += self._delegated_task_units(tool_call.arguments)
                 budget_after_tool_request = self._check_budget(
                     total_usage,
@@ -907,9 +922,12 @@ class LocalCodingAgent:
                             'message': policy_block_message,
                         }
                     )
-                if tool_call.name == 'delegate_agent':
+                if tool_call.name in ('Agent', 'delegate_agent'):
                     if tool_result is None:
                         tool_result = self._execute_delegate_agent(tool_call.arguments)
+                elif tool_call.name == 'Skill':
+                    if tool_result is None:
+                        tool_result = self._execute_skill(tool_call.arguments)
                 elif tool_result is None:
                     for update in execute_tool_streaming(
                         self.tool_registry,
@@ -1365,7 +1383,17 @@ class LocalCodingAgent:
                 return PromptPreflightResult()
             snapshot = recovered
 
-        if self._can_auto_compact_with_summary(session):
+        # Circuit-breaker: skip auto-compact after MAX_COMPACT_FAILURES consecutive failures
+        from .compact import MAX_COMPACT_FAILURES
+        if self._compact_consecutive_failures >= MAX_COMPACT_FAILURES:
+            stream_events.append(
+                {
+                    'type': 'auto_compact_circuit_breaker',
+                    'turn_index': turn_index,
+                    'consecutive_failures': self._compact_consecutive_failures,
+                }
+            )
+        elif self._can_auto_compact_with_summary(session):
             compact_result = compact_conversation(
                 self,
                 custom_instructions=(
@@ -1375,6 +1403,7 @@ class LocalCodingAgent:
                 ),
             )
             if compact_result.error is None:
+                self._compact_consecutive_failures = 0  # Reset on success
                 recovered = calculate_token_budget(
                     session=session,
                     model=self.model_config.model,
@@ -1387,7 +1416,9 @@ class LocalCodingAgent:
                         'turn_index': turn_index,
                         'pre_compact_token_count': compact_result.pre_compact_token_count,
                         'post_compact_token_count': compact_result.post_compact_token_count,
+                        'true_post_compact_token_count': compact_result.true_post_compact_token_count,
                         'summary_usage_tokens': compact_result.usage.total_tokens,
+                        'ptl_retries': compact_result.ptl_retries,
                         'projected_input_tokens': recovered.projected_input_tokens,
                         'soft_input_limit_tokens': recovered.soft_input_limit_tokens,
                         'hard_input_limit_tokens': recovered.hard_input_limit_tokens,
@@ -1417,11 +1448,13 @@ class LocalCodingAgent:
                         ),
                     )
             else:
+                self._compact_consecutive_failures += 1
                 stream_events.append(
                     {
                         'type': 'auto_compact_failed',
                         'turn_index': turn_index,
                         'reason': compact_result.error,
+                        'consecutive_failures': self._compact_consecutive_failures,
                     }
                 )
 
@@ -1455,6 +1488,39 @@ class LocalCodingAgent:
             f'Projected prompt tokens: {snapshot.projected_input_tokens:,}; '
             f'hard input limit: {snapshot.hard_input_limit_tokens:,}; '
             f'soft input limit: {snapshot.soft_input_limit_tokens:,}.'
+        )
+
+    def _microcompact_session_if_needed(
+        self,
+        session: AgentSessionState,
+        stream_events: list[dict[str, object]],
+        *,
+        turn_index: int,
+    ) -> None:
+        """Run time-based microcompaction to clear old tool results.
+
+        Fires when the gap since the last assistant message exceeds the
+        threshold (default 60 minutes), indicating the server-side cache
+        has expired and the full prefix will be rewritten anyway.
+        """
+        if not session.messages:
+            return
+        result = _microcompact_messages(
+            session.messages,
+            model=self.model_config.model,
+        )
+        if not result.triggered:
+            return
+        session.messages = result.messages
+        stream_events.append(
+            {
+                'type': 'microcompact',
+                'turn_index': turn_index,
+                'cleared_tool_count': result.cleared_tool_count,
+                'kept_tool_count': result.kept_tool_count,
+                'estimated_tokens_saved': result.estimated_tokens_saved,
+                'gap_minutes': round(result.gap_minutes, 1),
+            }
         )
 
     def _snip_session_if_needed(
@@ -1739,7 +1805,7 @@ class LocalCodingAgent:
         if (
             'path' not in tool_result.metadata
             and 'command' not in tool_result.metadata
-            and tool_result.metadata.get('action') != 'delegate_agent'
+            and tool_result.metadata.get('action') not in ('delegate_agent', 'Agent')
         ):
             return None
         metadata = dict(tool_result.metadata)
@@ -1766,7 +1832,7 @@ class LocalCodingAgent:
                 entry['after_snapshot_id'] = f'{path}:{after_sha256[:12]}'
         elif isinstance(metadata.get('command'), str):
             entry['history_kind'] = 'shell'
-        elif action == 'delegate_agent':
+        elif action in ('delegate_agent', 'Agent'):
             entry['history_kind'] = 'delegation'
             delegate_batches = metadata.get('delegate_batches')
             if isinstance(delegate_batches, list):
@@ -1972,46 +2038,205 @@ class LocalCodingAgent:
         )
         return any(pattern in text for pattern in patterns)
 
+    def _execute_skill(
+        self,
+        arguments: dict[str, object],
+    ) -> ToolExecutionResult:
+        """Execute a skill (slash command) through the Skill tool.
+
+        Maps the ``skill`` parameter to a slash command, invokes it, and
+        returns its output as a tool result.
+        """
+        from .agent_slash_commands import find_slash_command, get_slash_command_specs
+
+        skill_name = arguments.get('skill')
+        if not isinstance(skill_name, str) or not skill_name.strip():
+            return ToolExecutionResult(
+                name='Skill',
+                ok=False,
+                content='skill must be a non-empty string',
+            )
+
+        # Normalize: strip leading '/' if present
+        skill_name = skill_name.strip().lstrip('/')
+        args = arguments.get('args', '')
+        if not isinstance(args, str):
+            args = str(args) if args is not None else ''
+
+        # Look up the slash command
+        spec = find_slash_command(skill_name)
+        if spec is None:
+            available = sorted(
+                name
+                for spec in get_slash_command_specs()
+                for name in spec.names
+            )
+            return ToolExecutionResult(
+                name='Skill',
+                ok=False,
+                content=(
+                    f'Unknown skill: {skill_name}. '
+                    f'Available skills: {", ".join(available[:30])}'
+                ),
+                metadata={'action': 'skill_not_found', 'skill_name': skill_name},
+            )
+
+        # Invoke the slash command handler
+        input_text = f'/{skill_name} {args}'.strip()
+        result = spec.handler(self, args.strip(), input_text)
+
+        if result.output:
+            content = result.output
+        elif result.prompt:
+            content = result.prompt
+        else:
+            content = f'Skill /{skill_name} completed.'
+
+        return ToolExecutionResult(
+            name='Skill',
+            ok=True,
+            content=content,
+            metadata={
+                'action': 'skill',
+                'skill_name': skill_name,
+                'command_name': spec.names[0],
+                'handled': result.handled,
+                'should_query': result.should_query,
+            },
+        )
+
+    def _resolve_agent_definition(
+        self,
+        arguments: dict[str, object],
+    ) -> AgentDefinition:
+        """Resolve the agent definition from subagent_type or default to general-purpose."""
+        subagent_type = arguments.get('subagent_type')
+        if isinstance(subagent_type, str) and subagent_type:
+            agent_def = get_agent_definition(subagent_type)
+            if agent_def is not None:
+                return agent_def
+        return GENERAL_PURPOSE_AGENT
+
+    def _resolve_child_model_config(
+        self,
+        arguments: dict[str, object],
+        agent_def: AgentDefinition,
+    ) -> ModelConfig:
+        """Resolve model config for a child agent based on explicit override or agent definition."""
+        model_override = arguments.get('model')
+        agent_model = agent_def.model
+
+        # Explicit model param in arguments takes priority
+        if isinstance(model_override, str) and model_override in ('sonnet', 'opus', 'haiku'):
+            # Map friendly names to actual model identifiers if a mapping is available,
+            # otherwise use the parent's model config as base
+            return self.model_config
+
+        # Agent definition model
+        if agent_model and agent_model != 'inherit':
+            # Agent definitions may specify 'haiku', 'sonnet', 'opus'
+            # For now, inherit the parent's model config (model routing would
+            # require a model registry which is out of scope)
+            return self.model_config
+
+        return self.model_config
+
+    def _filter_tools_for_agent(
+        self,
+        agent_def: AgentDefinition,
+    ) -> dict[str, AgentTool]:
+        """Build the tool registry for a child agent based on its definition."""
+        # Start from parent tools, remove Agent/delegate_agent to prevent recursive spawning
+        base_tools = {
+            name: tool
+            for name, tool in self.tool_registry.items()
+            if name not in ('delegate_agent', 'Agent')
+        }
+
+        # Apply agent-specific tool allow-list
+        if agent_def.tools is not None:
+            allowed = set(agent_def.tools)
+            base_tools = {
+                name: tool
+                for name, tool in base_tools.items()
+                if name in allowed
+            }
+
+        # Apply agent-specific disallowed tools
+        if agent_def.disallowed_tools:
+            denied = set(agent_def.disallowed_tools)
+            base_tools = {
+                name: tool
+                for name, tool in base_tools.items()
+                if name not in denied
+            }
+
+        # Apply universal agent disallowed tools
+        base_tools = {
+            name: tool
+            for name, tool in base_tools.items()
+            if name not in ALL_AGENT_DISALLOWED_TOOLS
+        }
+
+        return base_tools
+
     def _execute_delegate_agent(
         self,
         arguments: dict[str, object],
     ) -> ToolExecutionResult:
+        tool_name = 'Agent'
+        agent_def = self._resolve_agent_definition(arguments)
         max_turns = arguments.get('max_turns')
         if max_turns is not None and (isinstance(max_turns, bool) or not isinstance(max_turns, int) or max_turns < 1):
             return ToolExecutionResult(
-                name='delegate_agent',
+                name=tool_name,
                 ok=False,
                 content='max_turns must be an integer >= 1',
             )
         subtasks = self._normalize_delegate_subtasks(arguments)
         if not subtasks:
             return ToolExecutionResult(
-                name='delegate_agent',
+                name=tool_name,
                 ok=False,
                 content='prompt must be a non-empty string or subtasks must contain at least one prompt',
             )
-        child_permissions = AgentPermissions(
-            allow_file_write=(
-                self.runtime_config.permissions.allow_file_write
-                and bool(arguments.get('allow_write', False))
-            ),
-            allow_shell_commands=(
-                self.runtime_config.permissions.allow_shell_commands
-                and bool(arguments.get('allow_shell', False))
-            ),
-            allow_destructive_shell_commands=False,
-        )
+
+        # Resolve child permissions — read-only agents get no write/shell
+        if agent_def.disallowed_tools and (
+            'edit_file' in agent_def.disallowed_tools
+            or 'write_file' in agent_def.disallowed_tools
+        ):
+            # Read-only agent (Explore, Plan, verification)
+            child_permissions = AgentPermissions(
+                allow_file_write=False,
+                allow_shell_commands=self.runtime_config.permissions.allow_shell_commands,
+                allow_destructive_shell_commands=False,
+            )
+        else:
+            child_permissions = AgentPermissions(
+                allow_file_write=(
+                    self.runtime_config.permissions.allow_file_write
+                    and bool(arguments.get('allow_write', False))
+                ),
+                allow_shell_commands=(
+                    self.runtime_config.permissions.allow_shell_commands
+                    and bool(arguments.get('allow_shell', False))
+                ),
+                allow_destructive_shell_commands=False,
+            )
+
+        # Resolve max_turns — agent definition or explicit param
+        effective_max_turns = max_turns or agent_def.max_turns or min(self.runtime_config.max_turns, 6)
+
         child_runtime_config = replace(
             self.runtime_config,
-            max_turns=max_turns or min(self.runtime_config.max_turns, 6),
+            max_turns=effective_max_turns,
             permissions=child_permissions,
             auto_compact_threshold_tokens=self.runtime_config.auto_compact_threshold_tokens,
         )
-        child_tools = {
-            name: tool
-            for name, tool in self.tool_registry.items()
-            if name != 'delegate_agent'
-        }
+
+        child_model_config = self._resolve_child_model_config(arguments, agent_def)
+        child_tools = self._filter_tools_for_agent(agent_def)
         include_parent_context = bool(arguments.get('include_parent_context', True))
         continue_on_error = bool(arguments.get('continue_on_error', True))
         max_failures = arguments.get('max_failures')
@@ -2112,15 +2337,32 @@ class LocalCodingAgent:
                         stop_processing = True
                         break
                     continue
+                # Use agent definition's system prompt if available
+                child_system_prompt = agent_def.system_prompt or self.custom_system_prompt
+                child_override_prompt = None
+                if agent_def.system_prompt:
+                    child_override_prompt = agent_def.system_prompt
+                else:
+                    child_override_prompt = self.override_system_prompt
+
+                # Inject critical system reminder if agent definition has one
+                child_append_prompt = self.append_system_prompt
+                if agent_def.critical_system_reminder:
+                    reminder = f'\n\n<system-reminder>\n{agent_def.critical_system_reminder}\n</system-reminder>'
+                    child_append_prompt = (
+                        (child_append_prompt or '') + reminder
+                    )
+
                 child_agent = LocalCodingAgent(
-                    model_config=self.model_config,
+                    model_config=child_model_config,
                     runtime_config=replace(
                         child_runtime_config,
                         max_turns=subtask.get('max_turns', child_runtime_config.max_turns),
+                        disable_claude_md_discovery=agent_def.omit_claude_md,
                     ),
-                    custom_system_prompt=self.custom_system_prompt,
-                    append_system_prompt=self.append_system_prompt,
-                    override_system_prompt=self.override_system_prompt,
+                    custom_system_prompt=child_system_prompt if not child_override_prompt else None,
+                    append_system_prompt=child_append_prompt,
+                    override_system_prompt=child_override_prompt,
                     tool_registry=child_tools,
                     agent_manager=self.agent_manager,
                     parent_agent_id=self.managed_agent_id,
@@ -2329,11 +2571,12 @@ class LocalCodingAgent:
         summary_lines.append('Final delegated output:')
         summary_lines.append(child_result.final_output)
         return ToolExecutionResult(
-            name='delegate_agent',
+            name=tool_name,
             ok=True,
             content='\n'.join(summary_lines).strip(),
             metadata={
-                'action': 'delegate_agent',
+                'action': 'Agent',
+                'subagent_type': agent_def.agent_type,
                 'child_session_id': child_result.session_id,
                 'child_session_ids': child_session_ids,
                 'child_turns': child_result.turns,
@@ -2562,7 +2805,7 @@ class LocalCodingAgent:
                     'message_count': len(plugin_delegate_after),
                 }
             )
-        if tool_call.name != 'delegate_agent':
+        if tool_call.name not in ('Agent', 'delegate_agent'):
             return
         delegate_batches = metadata.get('delegate_batches')
         if isinstance(delegate_batches, list):
@@ -3037,7 +3280,7 @@ class LocalCodingAgent:
             'session_turns': previous_turns + result.turns,
             'tool_calls': previous_tool_calls + result.tool_calls,
             'delegated_tasks': sum(
-                1 for entry in result.file_history if entry.get('action') == 'delegate_agent'
+                1 for entry in result.file_history if entry.get('action') in ('delegate_agent', 'Agent')
             ),
         }
         stored = StoredAgentSession(

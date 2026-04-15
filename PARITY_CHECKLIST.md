@@ -363,7 +363,7 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 
 ## 6. Built-in Tools
 
-### Tools implemented in Python (58 tools):
+### Tools implemented in Python (61 tools):
 
 - [x] `list_dir`
 - [x] `read_file`
@@ -428,8 +428,8 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 ### Tools in npm `tools.ts` not yet ported with full fidelity (40 tool dirs):
 
 Core tools needing full port:
-- [ ] `AgentTool` — Sub-agent spawning with built-in agents (explore, general-purpose, verification, plan, claudeCodeGuide, statusline), fork support, agent memory/snapshots, resume agent, color management
-- [ ] `SkillTool` — Skill execution with bundled skills
+- [x] `AgentTool` — Sub-agent spawning with built-in agents (explore, general-purpose, verification, plan, claudeCodeGuide, statusline) → `src/builtin_agents.py` — remaining: fork support, agent memory/snapshots, resume agent, color management
+- [x] `SkillTool` — Skill execution via slash commands → `src/agent_tools.py`, `src/agent_runtime.py` — remaining: bundled skill definitions, forked skill execution
 - [ ] `BriefTool` — Brief mode with attachments and file upload
 - [ ] `LSPTool` — Full upstream LSP fidelity beyond the current local heuristic runtime (server-backed diagnostics, go-to-definition, references, hover, symbol search, formatting)
 - [ ] `PowerShellTool` — Full PowerShell execution with security, path validation, CLM types, git safety
@@ -737,8 +737,8 @@ Missing:
 Working Python runtime today (21,193 lines across 51 source files, 10,480 lines across 37 test files):
 
 - [x] `src/main.py` (1,353 lines)
-- [x] `src/agent_runtime.py` (3,664 lines)
-- [x] `src/agent_tools.py` (2,994 lines)
+- [x] `src/agent_runtime.py` (4,318 lines)
+- [x] `src/agent_tools.py` (3,183 lines)
 - [x] `src/agent_prompting.py` (390 lines)
 - [x] `src/agent_context.py` (459 lines)
 - [x] `src/agent_context_usage.py` (356 lines)
@@ -768,6 +768,8 @@ Working Python runtime today (21,193 lines across 51 source files, 10,480 lines 
 - [x] `src/tokenizer_runtime.py` (202 lines)
 - [x] `src/workflow_runtime.py` (319 lines)
 - [x] `src/worktree_runtime.py` (448 lines)
+- [x] `src/builtin_agents.py` (426 lines)
+- [x] `src/microcompact.py` (236 lines)
 - [x] Plus 19 supporting modules
 
 Mirrored / scaffold areas needing real implementation:
@@ -785,13 +787,15 @@ Mirrored / scaffold areas needing real implementation:
 ### Tier 1 — Core Feature Gaps (highest user impact)
 - [x] Full BashTool security parity (sed validation, path validation, sandbox, destructive command warnings, command semantics) → `src/bash_security.py`
 - [x] LSP tool integration for code intelligence
-- [ ] Full AgentTool with built-in agent types (explore, general-purpose, verification, plan)
+- [x] Full AgentTool with built-in agent types (explore, general-purpose, verification, plan, statusline-setup, claude-code-guide) → `src/builtin_agents.py`, `src/agent_tools.py`, `src/agent_runtime.py`
 - [ ] Auto-compact and context collapse from `query.ts`
-- [ ] Full compact service (autoCompact, microCompact, sessionMemoryCompact)
+- [x] Microcompact service (time-based tool-result clearing) → `src/microcompact.py`
+- [x] Compact PTL retry loop and circuit-breaker tracking → `src/compact.py`
+- [ ] Full compact service (sessionMemoryCompact, cached microcompact)
 - [ ] Interactive REPL improvements
 
 ### Tier 2 — Important Feature Gaps
-- [ ] SkillTool with bundled skills
+- [x] SkillTool for slash command execution → `src/agent_tools.py`, `src/agent_runtime.py`
 - [ ] Full MCP service parity (auth, permissions, config, registry)
 - [ ] Plugin discovery, loading, and installation
 - [ ] Real remote session management (WebSocket, bridge)

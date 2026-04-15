@@ -9,6 +9,9 @@ Mirrors the npm ``src/services/compact/compact.ts`` and
   (``get_compact_user_summary_message``).
 - The core ``compact_conversation`` entry point that an
   ``/compact`` slash command or auto-compact subsystem can call.
+- PTL retry loop: drops oldest API-round groups when the compact
+  request itself hits prompt-too-long (up to ``MAX_PTL_RETRIES``).
+- Circuit-breaker tracking for consecutive failures.
 """
 
 from __future__ import annotations
@@ -38,10 +41,20 @@ ERROR_INCOMPLETE_RESPONSE = (
     'The conversation was not compacted.'
 )
 ERROR_USER_ABORT = 'Compaction canceled.'
+ERROR_PROMPT_TOO_LONG = (
+    'The compact request itself was too long even after retry truncation.'
+)
 
 MAX_COMPACT_FAILURES = 3
 """Circuit-breaker – stop retrying auto-compact after this many consecutive
 failures (mirrors the npm implementation)."""
+
+MAX_PTL_RETRIES = 3
+"""Maximum number of prompt-too-long retry attempts during compaction."""
+
+PTL_RETRY_MARKER = '[compact_ptl_retry_marker]'
+"""Synthetic user message prepended when dropping the first API-round group
+leaves an assistant message at position 0."""
 
 # ---------------------------------------------------------------------------
 # Prompt construction  (npm ``src/services/compact/prompt.ts``)
@@ -273,6 +286,103 @@ def get_compact_user_summary_message(
 
 
 # ---------------------------------------------------------------------------
+# API-round grouping (mirrors npm groupMessagesByApiRound)
+# ---------------------------------------------------------------------------
+
+def group_messages_by_api_round(
+    messages: list[AgentMessage],
+) -> list[list[AgentMessage]]:
+    """Group messages at API-round boundaries.
+
+    A new group starts when an assistant message with a different
+    ``message_id`` than the previous assistant message is encountered.
+    """
+    groups: list[list[AgentMessage]] = []
+    current: list[AgentMessage] = []
+    last_assistant_id: str | None = None
+
+    for msg in messages:
+        if (
+            msg.role == 'assistant'
+            and msg.message_id != last_assistant_id
+            and current
+        ):
+            groups.append(current)
+            current = [msg]
+        else:
+            current.append(msg)
+        if msg.role == 'assistant':
+            last_assistant_id = msg.message_id
+
+    if current:
+        groups.append(current)
+    return groups
+
+
+def truncate_head_for_ptl_retry(
+    messages: list[AgentMessage],
+    model: str = '',
+    token_gap: int | None = None,
+) -> list[AgentMessage] | None:
+    """Drop oldest API-round groups to free space for the compact request.
+
+    If *token_gap* is provided, drops enough groups to cover that many
+    tokens.  Otherwise falls back to dropping ~20% of groups.
+
+    Returns ``None`` if nothing can be dropped without emptying the list.
+    """
+    # Strip a previous PTL_RETRY_MARKER to prevent stalling
+    working = list(messages)
+    if (
+        working
+        and working[0].role == 'user'
+        and working[0].content == PTL_RETRY_MARKER
+    ):
+        working = working[1:]
+
+    groups = group_messages_by_api_round(working)
+    if len(groups) < 2:
+        return None
+
+    if token_gap is not None and token_gap > 0:
+        accumulated = 0
+        drop_count = 0
+        for group in groups:
+            group_tokens = sum(estimate_tokens(m.content, model) for m in group)
+            accumulated += group_tokens
+            drop_count += 1
+            if accumulated >= token_gap:
+                break
+    else:
+        # Fallback: drop ~20% of groups
+        drop_count = max(1, len(groups) // 5)
+
+    drop_count = min(drop_count, len(groups) - 1)
+    if drop_count < 1:
+        return None
+
+    remaining: list[AgentMessage] = []
+    for group in groups[drop_count:]:
+        remaining.extend(group)
+
+    if not remaining:
+        return None
+
+    # If the first remaining message is an assistant message, prepend a
+    # synthetic user marker so the API contract is satisfied.
+    if remaining[0].role == 'assistant':
+        marker = AgentMessage(
+            role='user',
+            content=PTL_RETRY_MARKER,
+            message_id='ptl_retry_marker',
+            metadata={'kind': 'ptl_retry_marker', 'is_meta': True},
+        )
+        remaining = [marker] + remaining
+
+    return remaining
+
+
+# ---------------------------------------------------------------------------
 # Compaction result
 # ---------------------------------------------------------------------------
 
@@ -285,14 +395,53 @@ class CompactionResult:
     messages_to_keep: list[AgentMessage] = field(default_factory=list)
     pre_compact_token_count: int = 0
     post_compact_token_count: int = 0
+    true_post_compact_token_count: int = 0
     summary_text: str = ''
     usage: UsageStats = field(default_factory=UsageStats)
     error: str | None = None
+    ptl_retries: int = 0
 
 
 # ---------------------------------------------------------------------------
 # Core compaction logic
 # ---------------------------------------------------------------------------
+
+def _is_prompt_too_long_response(content: str) -> bool:
+    """Check if a model response indicates a prompt-too-long error.
+
+    Some models embed the error in the response text rather than raising.
+    """
+    lower = content.lower()
+    return (
+        'prompt is too long' in lower
+        or 'prompt_too_long' in lower
+        or 'context_length_exceeded' in lower
+    )
+
+
+def _call_compact_model(
+    agent: 'LocalCodingAgent',
+    api_messages: list[dict[str, Any]],
+) -> tuple[str | None, 'UsageStats', str | None]:
+    """Call the model for compaction, returning (content, usage, error).
+
+    Returns (None, usage, error_string) on failure.
+    """
+    try:
+        turn = agent.client.complete(api_messages, tools=[])
+    except Exception as exc:
+        error_str = str(exc)
+        if 'prompt' in error_str.lower() and 'long' in error_str.lower():
+            return None, UsageStats(), 'prompt_too_long'
+        return None, UsageStats(), error_str
+
+    raw = turn.content or ''
+    if not raw.strip():
+        return None, turn.usage, 'empty_response'
+    if _is_prompt_too_long_response(raw):
+        return None, turn.usage, 'prompt_too_long'
+    return raw, turn.usage, None
+
 
 def compact_conversation(
     agent: 'LocalCodingAgent',
@@ -303,8 +452,10 @@ def compact_conversation(
     1. Build the compact prompt (9-section template).
     2. Collect the session messages to summarise.
     3. Send them + the compact prompt to the model.
-    4. Parse ``<summary>`` from the response.
-    5. Replace session messages with:
+    4. On prompt-too-long, retry by dropping oldest API-round groups
+       (up to ``MAX_PTL_RETRIES`` attempts).
+    5. Parse ``<summary>`` from the response.
+    6. Replace session messages with:
        boundary marker → summary user message → preserved tail.
 
     Returns a :class:`CompactionResult` with diagnostics.
@@ -317,13 +468,10 @@ def compact_conversation(
         )
 
     # ---- Determine which messages to compact vs preserve ----
-    # We keep the most recent ``preserve_count`` messages untouched.
     preserve_count = max(
         getattr(agent.runtime_config, 'compact_preserve_messages', 4), 1
     )
 
-    # Identify the prefix count (system-injected messages that precede the
-    # real conversation, e.g. a compaction-replay boundary).
     prefix_count = 0
     for msg in session.messages:
         if msg.metadata.get('kind') == 'compact_boundary':
@@ -341,7 +489,7 @@ def compact_conversation(
             error=ERROR_NOT_ENOUGH_MESSAGES,
         )
 
-    candidates = session.messages[prefix_count:compact_end]
+    candidates = list(session.messages[prefix_count:compact_end])
     preserved_tail = list(session.messages[compact_end:])
 
     if not candidates:
@@ -354,39 +502,67 @@ def compact_conversation(
     model = agent.model_config.model
     pre_tokens = sum(estimate_tokens(m.content, model) for m in session.messages)
 
-    # ---- Build the compact request messages ----
+    # ---- Build the compact request ----
     compact_prompt = get_compact_prompt(custom_instructions)
 
-    # We send the system prompt + candidate messages + the compact prompt as
-    # a user message.  The model returns the summary.
-    api_messages: list[dict[str, Any]] = []
+    # ---- PTL retry loop ----
+    messages_to_summarize = candidates
+    ptl_retries = 0
+    total_usage = UsageStats()
+    raw_summary: str | None = None
 
-    # System prompt (from session)
-    for part in session.system_prompt_parts:
-        if part.strip():
-            api_messages.append({'role': 'system', 'content': part})
+    for attempt in range(MAX_PTL_RETRIES + 1):
+        api_messages: list[dict[str, Any]] = []
 
-    # Candidate messages (the ones to be summarised)
-    for msg in candidates:
-        api_messages.append(msg.to_openai_message())
+        for part in session.system_prompt_parts:
+            if part.strip():
+                api_messages.append({'role': 'system', 'content': part})
 
-    # The compact prompt as the final user turn
-    api_messages.append({'role': 'user', 'content': compact_prompt})
+        for msg in messages_to_summarize:
+            api_messages.append(msg.to_openai_message())
 
-    # ---- Call the model ----
-    try:
-        turn = agent.client.complete(api_messages, tools=[])
-    except Exception as exc:
-        return CompactionResult(
-            boundary_message=_build_boundary(f'Compact API call failed: {exc}'),
-            error=str(exc),
+        api_messages.append({'role': 'user', 'content': compact_prompt})
+
+        content, usage, error = _call_compact_model(agent, api_messages)
+        total_usage = total_usage + usage
+
+        if error != 'prompt_too_long':
+            raw_summary = content
+            break
+
+        # PTL error — try truncating oldest API-round groups
+        ptl_retries += 1
+        if attempt >= MAX_PTL_RETRIES:
+            return CompactionResult(
+                boundary_message=_build_boundary(
+                    f'Compact request was too long after {ptl_retries} retries.'
+                ),
+                error=ERROR_PROMPT_TOO_LONG,
+                usage=total_usage,
+                ptl_retries=ptl_retries,
+            )
+
+        truncated = truncate_head_for_ptl_retry(
+            messages_to_summarize, model=model,
         )
+        if truncated is None:
+            return CompactionResult(
+                boundary_message=_build_boundary(
+                    'Cannot truncate further for compact retry.'
+                ),
+                error=ERROR_PROMPT_TOO_LONG,
+                usage=total_usage,
+                ptl_retries=ptl_retries,
+            )
+        messages_to_summarize = truncated
 
-    raw_summary = turn.content or ''
-    if not raw_summary.strip():
+    if raw_summary is None:
+        error_msg = error or ERROR_INCOMPLETE_RESPONSE
         return CompactionResult(
-            boundary_message=_build_boundary('Model returned empty summary.'),
-            error=ERROR_INCOMPLETE_RESPONSE,
+            boundary_message=_build_boundary(f'Compaction failed: {error_msg}'),
+            error=error_msg,
+            usage=total_usage,
+            ptl_retries=ptl_retries,
         )
 
     # ---- Format the summary ----
@@ -422,8 +598,13 @@ def compact_conversation(
         messages_to_keep=preserved_tail,
         pre_compact_token_count=pre_tokens,
         post_compact_token_count=post_tokens,
+        true_post_compact_token_count=sum(
+            estimate_tokens(m.content, model)
+            for m in [boundary, summary_msg] + preserved_tail
+        ),
         summary_text=summary_text,
-        usage=turn.usage,
+        usage=total_usage,
+        ptl_retries=ptl_retries,
     )
 
 
