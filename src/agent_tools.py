@@ -1036,8 +1036,81 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_todo_write,
         ),
         AgentTool(
+            name='Agent',
+            description=(
+                'Launch a new agent to handle complex, multi-step tasks. '
+                'Each agent type has specific capabilities and tools available to it.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'description': {
+                        'type': 'string',
+                        'description': 'A short (3-5 word) description of the task',
+                    },
+                    'prompt': {
+                        'type': 'string',
+                        'description': 'The task for the agent to perform',
+                    },
+                    'subagent_type': {
+                        'type': 'string',
+                        'description': 'The type of specialized agent to use for this task',
+                    },
+                    'model': {
+                        'type': 'string',
+                        'enum': ['sonnet', 'opus', 'haiku'],
+                        'description': 'Optional model override for this agent',
+                    },
+                    'run_in_background': {
+                        'type': 'boolean',
+                        'description': 'Set to true to run this agent in the background',
+                    },
+                    'isolation': {
+                        'type': 'string',
+                        'enum': ['worktree'],
+                        'description': 'Isolation mode. "worktree" creates a temporary git worktree.',
+                    },
+                    'subtasks': {
+                        'type': 'array',
+                        'items': {
+                            'oneOf': [
+                                {'type': 'string'},
+                                {
+                                    'type': 'object',
+                                    'properties': {
+                                        'prompt': {'type': 'string'},
+                                        'label': {'type': 'string'},
+                                        'max_turns': {'type': 'integer', 'minimum': 1, 'maximum': 20},
+                                        'resume_session_id': {'type': 'string'},
+                                        'session_id': {'type': 'string'},
+                                        'depends_on': {
+                                            'type': 'array',
+                                            'items': {'type': 'string'},
+                                        },
+                                    },
+                                    'required': ['prompt'],
+                                },
+                            ]
+                        },
+                    },
+                    'resume_session_id': {'type': 'string'},
+                    'session_id': {'type': 'string'},
+                    'max_turns': {'type': 'integer', 'minimum': 1, 'maximum': 20},
+                    'allow_write': {'type': 'boolean'},
+                    'allow_shell': {'type': 'boolean'},
+                    'include_parent_context': {'type': 'boolean'},
+                    'continue_on_error': {'type': 'boolean'},
+                    'max_failures': {'type': 'integer', 'minimum': 0, 'maximum': 20},
+                    'strategy': {'type': 'string'},
+                },
+                'required': ['description', 'prompt'],
+            },
+            handler=_agent_tool_placeholder,
+        ),
+        # Keep legacy name for backward compatibility
+        AgentTool(
             name='delegate_agent',
-            description='Delegate a subtask to a nested Python coding agent and return its summary.',
+            description='(Legacy) Delegate a subtask to a nested agent. Prefer using the Agent tool instead.',
             parameters={
                 'type': 'object',
                 'properties': {
@@ -1076,7 +1149,29 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     'strategy': {'type': 'string'},
                 },
             },
-            handler=_delegate_agent_placeholder,
+            handler=_agent_tool_placeholder,
+        ),
+        AgentTool(
+            name='Skill',
+            description=(
+                'Execute a skill within the main conversation. '
+                'Skills provide specialized capabilities and domain knowledge.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'skill': {
+                        'type': 'string',
+                        'description': 'The skill name. E.g., "commit", "compact", or "help"',
+                    },
+                    'args': {
+                        'type': 'string',
+                        'description': 'Optional arguments for the skill',
+                    },
+                },
+                'required': ['skill'],
+            },
+            handler=_execute_skill,
         ),
     ]
     return {tool.name: tool for tool in tools}
@@ -2754,12 +2849,28 @@ def _stream_bash(
     )
 
 
-def _delegate_agent_placeholder(
+def _agent_tool_placeholder(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> str:
     raise ToolExecutionError(
-        'delegate_agent must be handled by the runtime and is not available as a standalone tool handler'
+        'Agent/delegate_agent must be handled by the runtime and is not available as a standalone tool handler'
+    )
+
+
+def _execute_skill(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> str | tuple[str, dict[str, Any]]:
+    """Execute a skill (slash command) from the Skill tool.
+
+    The skill tool must be handled specially by the runtime because it
+    needs access to the agent to invoke slash commands.  This handler
+    is a placeholder that raises — the runtime intercepts `Skill` tool
+    calls before they reach this handler.
+    """
+    raise ToolExecutionError(
+        'Skill must be handled by the runtime and is not available as a standalone tool handler'
     )
 
 

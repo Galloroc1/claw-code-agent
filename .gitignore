@@ -34,3 +34,4 @@ test_cases
 e-commerce
 benchmarks/data/*.jsonl
 benchmarks/data/manifest.json
+claude-code-sourcemap-main
