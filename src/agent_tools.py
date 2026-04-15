@@ -1006,6 +1006,73 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_task_cancel,
         ),
         AgentTool(
+            name='EnterPlanMode',
+            description=(
+                'Enter plan mode. In plan mode, focus on exploring the codebase '
+                'and creating a plan rather than making changes. Use read-only '
+                'tools (Read, Grep, Glob) to investigate, then create a plan.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {},
+            },
+            handler=_enter_plan_mode,
+        ),
+        AgentTool(
+            name='ExitPlanMode',
+            description=(
+                'Exit plan mode and return to normal execution mode. '
+                'Call this after you have finished exploring and have a plan ready.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {},
+            },
+            handler=_exit_plan_mode,
+        ),
+        AgentTool(
+            name='TaskOutput',
+            description=(
+                'Get the output of a background task by its ID. '
+                'Use block=true (default) to wait for completion, '
+                'or block=false to check current status without waiting.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'The task ID to get output from.',
+                    },
+                    'block': {
+                        'type': 'boolean',
+                        'description': 'Whether to wait for completion (default true).',
+                    },
+                    'timeout': {
+                        'type': 'number',
+                        'description': 'Max wait time in ms (0-600000, default 30000).',
+                    },
+                },
+                'required': ['task_id'],
+            },
+            handler=_task_output,
+        ),
+        AgentTool(
+            name='TaskStop',
+            description='Stop a running background task by its ID.',
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'The task ID to stop.',
+                    },
+                },
+                'required': ['task_id'],
+            },
+            handler=_task_stop,
+        ),
+        AgentTool(
             name='todo_write',
             description='Replace the current local runtime task list with a structured todo list.',
             parameters={
@@ -2721,6 +2788,107 @@ def _todo_write(arguments: dict[str, Any], context: ToolExecutionContext) -> str
             mutation=mutation,
             total_tasks=mutation.after_count,
         ),
+    )
+
+
+def _enter_plan_mode(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
+    """Enter plan mode — focus on exploration and planning, not execution."""
+    if getattr(context, '_plan_mode', False):
+        return 'Already in plan mode.'
+    context._plan_mode = True
+    return (
+        'Entered plan mode. Focus on exploring the codebase and creating a plan. '
+        'Use read-only tools (Read, Grep, Glob) to investigate. '
+        'When your plan is ready, call ExitPlanMode to return to normal mode.'
+    )
+
+
+def _exit_plan_mode(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
+    """Exit plan mode and return to normal execution."""
+    if not getattr(context, '_plan_mode', False):
+        return 'Not currently in plan mode.'
+    context._plan_mode = False
+    return 'Exited plan mode. You can now execute changes based on your plan.'
+
+
+def _task_output(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
+    """Get output from a background task."""
+    runtime = _require_task_runtime(context)
+    task_id = _require_string(arguments, 'task_id')
+    block = arguments.get('block', True)
+    timeout_ms = arguments.get('timeout', 30000)
+    if not isinstance(timeout_ms, (int, float)):
+        timeout_ms = 30000
+    timeout_ms = max(0, min(timeout_ms, 600000))
+
+    task = runtime.get_task(task_id)
+    if task is None:
+        raise ToolExecutionError(f'Task not found: {task_id}')
+
+    if task.status in ('completed', 'cancelled', 'failed'):
+        output = getattr(task, 'output', '') or getattr(task, 'result', '') or ''
+        return (
+            f'<retrieval_status>success</retrieval_status>\n'
+            f'<task_id>{task_id}</task_id>\n'
+            f'<status>{task.status}</status>\n'
+            f'<output>{output}</output>'
+        )
+
+    if not block:
+        return (
+            f'<retrieval_status>not_ready</retrieval_status>\n'
+            f'<task_id>{task_id}</task_id>\n'
+            f'<status>{task.status}</status>'
+        )
+
+    # Blocking wait — poll until completion or timeout
+    import time as _time
+    deadline = _time.monotonic() + (timeout_ms / 1000.0)
+    while _time.monotonic() < deadline:
+        task = runtime.get_task(task_id)
+        if task is None or task.status in ('completed', 'cancelled', 'failed'):
+            break
+        _time.sleep(0.1)
+
+    if task is None:
+        raise ToolExecutionError(f'Task disappeared: {task_id}')
+
+    if task.status in ('completed', 'cancelled', 'failed'):
+        output = getattr(task, 'output', '') or getattr(task, 'result', '') or ''
+        return (
+            f'<retrieval_status>success</retrieval_status>\n'
+            f'<task_id>{task_id}</task_id>\n'
+            f'<status>{task.status}</status>\n'
+            f'<output>{output}</output>'
+        )
+
+    return (
+        f'<retrieval_status>timeout</retrieval_status>\n'
+        f'<task_id>{task_id}</task_id>\n'
+        f'<status>{task.status}</status>'
+    )
+
+
+def _task_stop(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
+    """Stop a running background task."""
+    runtime = _require_task_runtime(context)
+    task_id = _require_string(arguments, 'task_id')
+
+    task = runtime.get_task(task_id)
+    if task is None:
+        raise ToolExecutionError(f'Task not found: {task_id}')
+
+    if task.status not in ('pending', 'in_progress', 'running'):
+        raise ToolExecutionError(
+            f'Task {task_id} is not running (status: {task.status})'
+        )
+
+    # Cancel the task via the runtime
+    mutation = runtime.cancel_task(task_id, reason='Stopped by TaskStop tool')
+    description = getattr(task, 'title', '') or getattr(task, 'description', '') or task_id
+    return (
+        f'Successfully stopped task: {task_id} ({description})',
+        {'action': 'task_stop', 'task_id': task_id},
     )
 
 

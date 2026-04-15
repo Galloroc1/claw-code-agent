@@ -2,7 +2,7 @@
 
 This document tracks what is already implemented in Python and what is still missing compared with the upstream npm runtime.
 
-This is a functionality-oriented checklist, not a line-by-line source equivalence claim. Large parts of the mirrored Python workspace still act as inventory or scaffolding, while the working Python runtime currently lives mainly in [`src/agent_runtime.py`](src/agent_runtime.py), [`src/query_engine.py`](src/query_engine.py), [`src/agent_tools.py`](src/agent_tools.py), [`src/agent_prompting.py`](src/agent_prompting.py), [`src/agent_context.py`](src/agent_context.py), [`src/agent_manager.py`](src/agent_manager.py), [`src/plugin_runtime.py`](src/plugin_runtime.py), [`src/agent_slash_commands.py`](src/agent_slash_commands.py), and [`src/openai_compat.py`](src/openai_compat.py).
+This is a functionality-oriented checklist, not a line-by-line source equivalence claim. Large parts of the mirrored Python workspace still act as inventory or scaffolding, while the working Python runtime currently lives mainly in [`src/agent_runtime.py`](src/agent_runtime.py), [`src/query_engine.py`](src/query_engine.py), [`src/agent_tools.py`](src/agent_tools.py), [`src/agent_prompting.py`](src/agent_prompting.py), [`src/agent_context.py`](src/agent_context.py), [`src/agent_manager.py`](src/agent_manager.py), [`src/plugin_runtime.py`](src/plugin_runtime.py), [`src/agent_slash_commands.py`](src/agent_slash_commands.py), [`src/openai_compat.py`](src/openai_compat.py), [`src/builtin_agents.py`](src/builtin_agents.py), [`src/microcompact.py`](src/microcompact.py), [`src/compact.py`](src/compact.py), [`src/bundled_skills.py`](src/bundled_skills.py), and [`src/session_memory_compact.py`](src/session_memory_compact.py).
 
 ---
 
@@ -254,7 +254,7 @@ Missing:
 
 - [ ] Full tokenizer/chat-message framing parity beyond the current model-aware text token counters
 - [ ] Full parity with `utils/queryContext.ts` (context analysis, suggestions, cache shaping)
-- [ ] Rich memory prompt loading (`services/SessionMemory/`)
+- [x] Session memory compact (`services/SessionMemory/` partial) → `src/session_memory_compact.py` — remaining: background LLM extraction, full template handling
 - [ ] Internal permission-aware memory handling
 - [ ] Resume-aware prompt cache shaping used upstream
 - [ ] More exact context cache invalidation rules
@@ -269,7 +269,7 @@ Missing:
 
 ## 5. Slash Commands
 
-Done (37 slash command names in 29 specs):
+Done (53 slash command names in 37 specs):
 
 - [x] `/help`, `/commands`
 - [x] `/context`, `/usage`
@@ -311,7 +311,7 @@ Done (37 slash command names in 29 specs):
 
 Missing npm slash commands (from `src/commands/` — 80+ commands total):
 
-- [ ] `/add-dir` — Add a new working directory
+- [x] `/add-dir` — Add a new working directory
 - [ ] `/agents` — Manage agent configurations
 - [x] `/branch` — Create a branch of the current conversation
 - [ ] `/bridge` — Connect for remote-control sessions
@@ -328,7 +328,7 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 - [x] `/exit` — Exit the REPL
 - [x] `/export` — Export conversation to file or clipboard
 - [ ] `/extra-usage` — Configure extra usage for rate limits
-- [ ] `/fast` — Toggle fast mode
+- [x] `/fast` — Toggle fast mode
 - [ ] `/feedback` — Submit feedback
 - [x] `/files` — List all files currently in context
 - [ ] `/ide` — Manage IDE integrations and show status
@@ -339,7 +339,7 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 - [ ] `/output-style` — Change output style
 - [ ] `/passes` — Passes management
 - [ ] `/plugin` — Plugin management
-- [ ] `/pr_comments` — Get comments from a GitHub PR
+- [x] `/pr-comments`, `/pr_comments` — Get comments from a GitHub PR (prompt-type)
 - [ ] `/privacy-settings` — View/update privacy settings
 - [ ] `/rate-limit-options` — Show options when rate limited
 - [ ] `/release-notes` — View release notes
@@ -347,23 +347,24 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 - [ ] `/remote-env` — Configure default remote environment
 - [ ] `/remote-setup` — Remote setup configuration
 - [x] `/rename` — Rename current conversation
-- [ ] `/resume` — Resume a previous conversation
-- [ ] `/rewind` — Restore code/conversation to a previous point
+- [x] `/resume`, `/continue` — Resume a previous conversation
+- [x] `/rewind`, `/checkpoint` — Restore code/conversation to a previous point
 - [ ] `/sandbox-toggle` — Toggle sandbox mode
-- [ ] `/skills` — List available skills
+- [x] `/skills` — List available skills
 - [x] `/stats` — Usage statistics and activity
 - [ ] `/stickers` — Order stickers
 - [x] `/tag` — Toggle a searchable tag on the session
 - [ ] `/theme` — Change the theme
 - [ ] `/upgrade` — Upgrade to Max
-- [ ] `/vim` — Toggle Vim/Normal editing modes
+- [x] `/vim` — Toggle Vim/Normal editing modes
 - [ ] `/voice` — Toggle voice mode
 - [ ] Feature-gated: `/buddy`, `/fork`, `/peers`, `/proactive`, `/torch`, `/workflows` (full), etc.
-- [ ] Internal: `/backfill-sessions`, `/break-cache`, `/bughunter`, `/commit`, `/commit-push-pr`, `/init-verifiers`, `/mock-limits`, `/version`, `/ultraplan`, `/autofix-pr`, etc.
+- [ ] Internal: `/backfill-sessions`, `/break-cache`, `/bughunter`, `/commit-push-pr`, `/init-verifiers`, `/mock-limits`, `/version`, `/ultraplan`, `/autofix-pr`, etc.
+- [x] `/commit` — Create a git commit (prompt-type with injected git context)
 
 ## 6. Built-in Tools
 
-### Tools implemented in Python (61 tools):
+### Tools implemented in Python (65 tools):
 
 - [x] `list_dir`
 - [x] `read_file`
@@ -424,12 +425,16 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 - [x] `team_delete`
 - [x] `send_message`
 - [x] `team_messages`
+- [x] `EnterPlanMode`
+- [x] `ExitPlanMode`
+- [x] `TaskOutput`
+- [x] `TaskStop`
 
 ### Tools in npm `tools.ts` not yet ported with full fidelity (40 tool dirs):
 
 Core tools needing full port:
 - [x] `AgentTool` — Sub-agent spawning with built-in agents (explore, general-purpose, verification, plan, claudeCodeGuide, statusline) → `src/builtin_agents.py` — remaining: fork support, agent memory/snapshots, resume agent, color management
-- [x] `SkillTool` — Skill execution via slash commands → `src/agent_tools.py`, `src/agent_runtime.py` — remaining: bundled skill definitions, forked skill execution
+- [x] `SkillTool` — Skill execution via slash commands and bundled skills → `src/agent_tools.py`, `src/agent_runtime.py`, `src/bundled_skills.py` — remaining: forked skill execution
 - [ ] `BriefTool` — Brief mode with attachments and file upload
 - [ ] `LSPTool` — Full upstream LSP fidelity beyond the current local heuristic runtime (server-backed diagnostics, go-to-definition, references, hover, symbol search, formatting)
 - [ ] `PowerShellTool` — Full PowerShell execution with security, path validation, CLM types, git safety
@@ -438,12 +443,12 @@ Core tools needing full port:
 - [ ] `McpAuthTool` — MCP authentication handling
 - [ ] `ConfigTool` — Full config management with supported settings list
 - [ ] `SyntheticOutputTool` — Synthetic output injection
-- [ ] `EnterPlanModeTool` — Enter plan mode with UI
-- [ ] `ExitPlanModeTool` — Exit plan mode with V2 flow
+- [x] `EnterPlanModeTool` — Enter plan mode → `src/agent_tools.py`
+- [x] `ExitPlanModeTool` — Exit plan mode → `src/agent_tools.py`
 - [ ] `EnterWorktreeTool` — Full worktree enter with UI
 - [ ] `ExitWorktreeTool` — Full worktree exit with UI
-- [ ] `TaskOutputTool` — Task output display
-- [ ] `TaskStopTool` — Stop a running task
+- [x] `TaskOutputTool` — Task output display → `src/agent_tools.py`
+- [x] `TaskStopTool` — Stop a running task → `src/agent_tools.py`
 
 Feature-gated tools:
 - [ ] `CronCreateTool` / `CronDeleteTool` / `CronListTool` — Cron scheduling (AGENT_TRIGGERS)
@@ -546,8 +551,8 @@ Missing:
 - [ ] Bundled plugin support (`plugins/bundledPlugins.ts`, `plugins/bundled/`)
 - [ ] Plugin lifecycle management
 - [ ] Plugin update/cache behavior
-- [ ] Skill discovery and execution (`skills/bundledSkills.ts`, `skills/loadSkillsDir.ts`, `skills/mcpSkillBuilders.ts`, `skills/bundled/`)
-- [ ] Bundled skill support
+- [x] Skill discovery and execution → `src/bundled_skills.py` (simplify, verify, debug, update-config) — remaining: loadSkillsDir, mcpSkillBuilders, disk-based SKILL.md loading
+- [x] Bundled skill support → `src/bundled_skills.py` — remaining: skillify, batch, loop, schedule, claude-api, chrome, and feature-gated skills
 - [ ] Full plugin and skill parity
 
 ## 10. Interactive UI / REPL / TUI
@@ -629,7 +634,7 @@ Missing:
 - [ ] API service (`services/api/` — 20+ files: claude client, dumpPrompts, errorUtils, filesApi, firstTokenDate, grove, logging, metricsOptOut, promptCacheBreakDetection, sessionIngress, usage, withRetry, etc.)
 - [ ] LSP service (`services/lsp/` — 7 files: LSPClient, LSPDiagnosticRegistry, LSPServerInstance, LSPServerManager, config, manager, passiveFeedback)
 - [ ] Tools service (`services/tools/` — 4 files: StreamingToolExecutor, toolExecution, toolHooks, toolOrchestration)
-- [ ] Compact service (`services/compact/` — 6 files: compact, autoCompact, microCompact, apiMicrocompact, sessionMemoryCompact, compactWarningHook)
+- [ ] Compact service (`services/compact/` — 6 files) — partially ported: compact → `src/compact.py`, microCompact → `src/microcompact.py`, sessionMemoryCompact → `src/session_memory_compact.py`; remaining: autoCompact trigger, apiMicrocompact, compactWarningHook
 - [ ] Auto-dream service (`services/autoDream/` — 4 files: autoDream, config, consolidationLock, consolidationPrompt)
 - [ ] Agent summary service (`services/AgentSummary/`)
 - [ ] Magic docs service (`services/MagicDocs/`)

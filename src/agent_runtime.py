@@ -2042,12 +2042,12 @@ class LocalCodingAgent:
         self,
         arguments: dict[str, object],
     ) -> ToolExecutionResult:
-        """Execute a skill (slash command) through the Skill tool.
+        """Execute a skill through the Skill tool.
 
-        Maps the ``skill`` parameter to a slash command, invokes it, and
-        returns its output as a tool result.
+        Checks bundled skills first, then falls back to slash commands.
         """
         from .agent_slash_commands import find_slash_command, get_slash_command_specs
+        from .bundled_skills import find_bundled_skill, get_bundled_skills
 
         skill_name = arguments.get('skill')
         if not isinstance(skill_name, str) or not skill_name.strip():
@@ -2063,20 +2063,38 @@ class LocalCodingAgent:
         if not isinstance(args, str):
             args = str(args) if args is not None else ''
 
-        # Look up the slash command
+        # 1. Check bundled skills first
+        bundled = find_bundled_skill(skill_name)
+        if bundled is not None:
+            prompt = bundled.get_prompt(self, args.strip())
+            return ToolExecutionResult(
+                name='Skill',
+                ok=True,
+                content=prompt,
+                metadata={
+                    'action': 'skill',
+                    'skill_name': skill_name,
+                    'source': 'bundled',
+                    'should_query': True,
+                },
+            )
+
+        # 2. Fall back to slash commands
         spec = find_slash_command(skill_name)
         if spec is None:
-            available = sorted(
+            available_cmds = sorted(
                 name
-                for spec in get_slash_command_specs()
-                for name in spec.names
+                for s in get_slash_command_specs()
+                for name in s.names
             )
+            available_skills = [sk.name for sk in get_bundled_skills()]
+            all_available = sorted(set(available_cmds + available_skills))
             return ToolExecutionResult(
                 name='Skill',
                 ok=False,
                 content=(
                     f'Unknown skill: {skill_name}. '
-                    f'Available skills: {", ".join(available[:30])}'
+                    f'Available skills: {", ".join(all_available[:30])}'
                 ),
                 metadata={'action': 'skill_not_found', 'skill_name': skill_name},
             )
