@@ -290,6 +290,11 @@ def get_slash_command_specs() -> tuple[SlashCommandSpec, ...]:
             handler=_handle_tools,
         ),
         SlashCommandSpec(
+            names=('agents',),
+            description='List active local agent configurations or show one agent definition by name.',
+            handler=_handle_agents,
+        ),
+        SlashCommandSpec(
             names=('memory',),
             description='Show the currently loaded CLAUDE.md memory bundle and discovered files.',
             handler=_handle_memory,
@@ -796,6 +801,20 @@ def _handle_model(agent: 'LocalCodingAgent', args: str, input_text: str) -> Slas
 
 def _handle_tools(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:
     return _local_result(input_text, agent.render_tools_report())
+
+
+def _handle_agents(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    trimmed = args.strip()
+    if not trimmed or trimmed in {'active', 'list'}:
+        return _local_result(input_text, agent.render_agents_report())
+    if trimmed == 'all':
+        return _local_result(input_text, agent.render_agents_report(show_all=True))
+    if trimmed.startswith('show '):
+        agent_type = trimmed[5:].strip()
+        if not agent_type:
+            return _local_result(input_text, 'Usage: /agents [all|active|show <agent-type>]')
+        return _local_result(input_text, agent.render_agent_detail_report(agent_type))
+    return _local_result(input_text, agent.render_agent_detail_report(trimmed))
 
 
 def _handle_memory(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:

@@ -34,6 +34,14 @@ class AgentDefinition:
     max_turns: int | None = None
     critical_system_reminder: str | None = None
     source: str = 'built-in'
+    filename: str | None = None
+    base_dir: str | None = None
+    skills: tuple[str, ...] = ()
+    memory: str | None = None
+    effort: str | int | None = None
+    initial_prompt: str | None = None
+    isolation: str | None = None
+    hook_names: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -411,12 +419,12 @@ def format_agent_listing(agents: tuple[AgentDefinition, ...] | None = None) -> s
         agents = _BUILTIN_AGENTS
     lines: list[str] = []
     for agent in agents:
-        tools_desc = _describe_tools(agent)
+        tools_desc = describe_agent_tools(agent)
         lines.append(f'- {agent.agent_type}: {agent.when_to_use} (Tools: {tools_desc})')
     return '\n'.join(lines)
 
 
-def _describe_tools(agent: AgentDefinition) -> str:
+def describe_agent_tools(agent: AgentDefinition) -> str:
     """Describe the tool access for an agent definition."""
     if agent.tools is not None:
         return ', '.join(agent.tools) if agent.tools else 'none'

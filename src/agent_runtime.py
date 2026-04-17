@@ -14,6 +14,12 @@ from .agent_context import render_context_report as render_agent_context_report
 from .agent_context_usage import collect_context_usage, estimate_tokens, format_context_usage
 from .compact import compact_conversation
 from .ask_user_runtime import AskUserRuntime
+from .agent_registry import (
+    find_agent_definition,
+    load_agent_registry,
+    render_agent_detail,
+    render_agents_report,
+)
 from .config_runtime import ConfigRuntime
 from .hook_policy import HookPolicyRuntime
 from .lsp_runtime import LSPRuntime
@@ -67,9 +73,6 @@ from .session_store import (
 from .token_budget import calculate_token_budget, format_token_budget
 from .builtin_agents import (
     AgentDefinition,
-    get_agent_definition,
-    get_builtin_agents,
-    format_agent_listing,
     ALL_AGENT_DISALLOWED_TOOLS,
     GENERAL_PURPOSE_AGENT,
 )
@@ -256,10 +259,17 @@ class LocalCodingAgent:
             prompt_context=prompt_context,
             runtime_config=self.runtime_config,
             tools=self.tool_registry,
+            available_agents=self.available_agents(),
             custom_system_prompt=self.custom_system_prompt,
             append_system_prompt=self.append_system_prompt,
             override_system_prompt=self.override_system_prompt,
         )
+
+    def load_agent_registry(self):
+        return load_agent_registry(self.runtime_config.cwd)
+
+    def available_agents(self) -> tuple[AgentDefinition, ...]:
+        return self.load_agent_registry().active_agents
 
     def build_session(
         self,
@@ -2130,7 +2140,7 @@ class LocalCodingAgent:
         """Resolve the agent definition from subagent_type or default to general-purpose."""
         subagent_type = arguments.get('subagent_type')
         if isinstance(subagent_type, str) and subagent_type:
-            agent_def = get_agent_definition(subagent_type)
+            agent_def = find_agent_definition(self.runtime_config.cwd, subagent_type)
             if agent_def is not None:
                 return agent_def
         return GENERAL_PURPOSE_AGENT
@@ -2145,17 +2155,12 @@ class LocalCodingAgent:
         agent_model = agent_def.model
 
         # Explicit model param in arguments takes priority
-        if isinstance(model_override, str) and model_override in ('sonnet', 'opus', 'haiku'):
-            # Map friendly names to actual model identifiers if a mapping is available,
-            # otherwise use the parent's model config as base
-            return self.model_config
+        if isinstance(model_override, str) and model_override.strip():
+            return replace(self.model_config, model=model_override.strip())
 
         # Agent definition model
         if agent_model and agent_model != 'inherit':
-            # Agent definitions may specify 'haiku', 'sonnet', 'opus'
-            # For now, inherit the parent's model config (model routing would
-            # require a model registry which is out of scope)
-            return self.model_config
+            return replace(self.model_config, model=agent_model)
 
         return self.model_config
 
@@ -2394,7 +2399,12 @@ class LocalCodingAgent:
                         child_agent.managed_agent_id,
                         child_index=index,
                     )
+                resume_session_id = subtask.get('resume_session_id')
                 child_prompt = str(subtask['prompt'])
+                if agent_def.initial_prompt and not (
+                    isinstance(resume_session_id, str) and resume_session_id
+                ):
+                    child_prompt = f'{agent_def.initial_prompt.strip()}\n\n{child_prompt}'.strip()
                 if delegate_preflight_messages:
                     child_prompt = self._prepend_plugin_delegate_context(
                         child_prompt,
@@ -2402,7 +2412,6 @@ class LocalCodingAgent:
                     )
                 if include_parent_context and prior_results:
                     child_prompt = self._prepend_delegate_context(child_prompt, prior_results)
-                resume_session_id = subtask.get('resume_session_id')
                 resume_used = False
                 if isinstance(resume_session_id, str) and resume_session_id:
                     try:
@@ -3396,6 +3405,18 @@ class LocalCodingAgent:
                 state = 'blocked by hook policy'
             lines.append(f'- `{tool.name}`: {tool.description} [{state}]')
         return '\n'.join(lines)
+
+    def render_agents_report(self, *, show_all: bool = False) -> str:
+        snapshot = self.load_agent_registry()
+        return render_agents_report(
+            snapshot,
+            cwd=self.runtime_config.cwd,
+            show_all=show_all,
+        )
+
+    def render_agent_detail_report(self, agent_type: str) -> str:
+        snapshot = self.load_agent_registry()
+        return render_agent_detail(snapshot, agent_type)
 
     def render_memory_report(self) -> str:
         prompt_context = self.build_prompt_context()

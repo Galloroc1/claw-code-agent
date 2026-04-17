@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -112,6 +113,37 @@ def make_recording_streaming_urlopen_side_effect(
 
 
 class AgentRuntimeTests(unittest.TestCase):
+    def test_custom_project_agent_is_resolved_for_child_agent_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as home_dir, tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agents_dir = workspace / '.claude' / 'agents'
+            agents_dir.mkdir(parents=True)
+            (agents_dir / 'Explore.md').write_text(
+                (
+                    '---\n'
+                    'name: Explore\n'
+                    'description: "Project-specific explore agent."\n'
+                    'tools: read_file, grep_search\n'
+                    'model: child-model\n'
+                    'initialPrompt: Start with a repository scan.\n'
+                    '---\n\n'
+                    'Search the repository and report findings.\n'
+                ),
+                encoding='utf-8',
+            )
+            with patch.dict(os.environ, {'HOME': home_dir}):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='parent-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                agent_def = agent._resolve_agent_definition({'subagent_type': 'Explore'})
+                child_model = agent._resolve_child_model_config({}, agent_def)
+                child_tools = agent._filter_tools_for_agent(agent_def)
+            self.assertEqual(agent_def.source, 'projectSettings')
+            self.assertEqual(agent_def.initial_prompt, 'Start with a repository scan.')
+            self.assertEqual(child_model.model, 'child-model')
+            self.assertEqual(sorted(child_tools), ['grep_search', 'read_file'])
+
     def test_openai_client_parses_tool_calls(self) -> None:
         responses = [
             {

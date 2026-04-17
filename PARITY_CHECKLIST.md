@@ -114,6 +114,9 @@ Done:
 - [x] Query-engine runtime context-reduction summaries
 - [x] Query-engine runtime lineage summaries
 - [x] Query-engine runtime resumed-child orchestration summaries
+- [x] Filesystem-backed custom agent discovery from `~/.claude/agents` and `./.claude/agents`
+- [x] Active agent override precedence across built-in, user, and project agent definitions
+- [x] Custom agent resolution in the `Agent` tool with model, tool-filter, and initial-prompt support
 
 Missing:
 
@@ -141,6 +144,7 @@ Done:
 - [x] `agent-context` command
 - [x] `agent-context-raw` command
 - [x] `token-budget` command
+- [x] `agents` command
 - [x] Local background session mode
 - [x] Local background session listing (`agent-ps`)
 - [x] Local background session logs (`agent-logs`)
@@ -195,6 +199,7 @@ Done:
 - [x] Local planning guidance section in the Python system prompt
 - [x] Local task guidance section in the Python system prompt
 - [x] Local LSP guidance section in the Python system prompt
+- [x] Local agent-configuration guidance section in the Python system prompt
 
 - [x] Product metadata/branding from `constants/product.ts` — ported to `src/prompt_constants.py`
 - [x] API limits constants from `constants/apiLimits.ts` — ported to `src/prompt_constants.py`
@@ -312,7 +317,7 @@ Done (53 slash command names in 37 specs):
 Missing npm slash commands (from `src/commands/` — 80+ commands total):
 
 - [x] `/add-dir` — Add a new working directory
-- [ ] `/agents` — Manage agent configurations
+- [x] `/agents` — Inspect local agent configurations and show active definitions
 - [x] `/branch` — Create a branch of the current conversation
 - [ ] `/bridge` — Connect for remote-control sessions
 - [ ] `/btw` — Quick side question without interrupting main conversation
@@ -361,6 +366,7 @@ Missing npm slash commands (from `src/commands/` — 80+ commands total):
 - [ ] Feature-gated: `/buddy`, `/fork`, `/peers`, `/proactive`, `/torch`, `/workflows` (full), etc.
 - [ ] Internal: `/backfill-sessions`, `/break-cache`, `/bughunter`, `/commit-push-pr`, `/init-verifiers`, `/mock-limits`, `/version`, `/ultraplan`, `/autofix-pr`, etc.
 - [x] `/commit` — Create a git commit (prompt-type with injected git context)
+- [ ] Full `/agents` parity for create/edit/delete flows and multi-source management UI
 
 ## 6. Built-in Tools
 
