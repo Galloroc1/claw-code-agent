@@ -874,6 +874,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     token_budget_parser = subparsers.add_parser('token-budget', help='render the current token budget and prompt-length limits')
     _add_agent_common_args(token_budget_parser, include_backend=False)
+
+    agents_parser = subparsers.add_parser('agents', help='list active local agent configurations or show one agent definition')
+    agents_parser.add_argument('agent_type', nargs='?')
+    agents_parser.add_argument('--all', action='store_true')
+    _add_agent_common_args(agents_parser, include_backend=False)
     return parser
 
 
@@ -1506,6 +1511,13 @@ def main(argv: list[str] | None = None) -> int:
         agent = _build_agent(args)
         agent.last_session = agent.build_session()
         print(agent.render_token_budget_report())
+        return 0
+    if args.command == 'agents':
+        agent = _build_agent(args)
+        if args.agent_type:
+            print(agent.render_agent_detail_report(args.agent_type))
+        else:
+            print(agent.render_agents_report(show_all=bool(args.all)))
         return 0
 
     parser.error(f'unknown command: {args.command}')

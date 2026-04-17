@@ -6,6 +6,7 @@ from pathlib import Path
 from .agent_context import build_context_snapshot
 from .agent_tools import AgentTool
 from .agent_types import AgentRuntimeConfig, ModelConfig
+from .builtin_agents import AgentDefinition, format_agent_listing
 
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 
@@ -76,6 +77,7 @@ def build_system_prompt_parts(
     prompt_context: PromptContext,
     runtime_config: AgentRuntimeConfig,
     tools: dict[str, AgentTool],
+    available_agents: tuple[AgentDefinition, ...] = (),
     custom_system_prompt: str | None = None,
     append_system_prompt: str | None = None,
     override_system_prompt: str | None = None,
@@ -90,6 +92,7 @@ def build_system_prompt_parts(
         get_doing_tasks_section(),
         get_actions_section(),
         get_using_your_tools_section(enabled_tool_names),
+        get_agent_guidance_section(enabled_tool_names, available_agents),
         get_plugin_guidance_section(prompt_context),
         get_mcp_guidance_section(prompt_context),
         get_remote_guidance_section(prompt_context),
@@ -202,6 +205,26 @@ def get_tone_and_style_section() -> str:
         'Do not put a colon immediately before a tool call. If you announce an action, end the sentence normally.',
     ]
     return '\n'.join(['# Tone and style', *prepend_bullets(items)])
+
+
+def get_agent_guidance_section(
+    enabled_tool_names: set[str],
+    available_agents: tuple[AgentDefinition, ...],
+) -> str:
+    if 'Agent' not in enabled_tool_names and 'delegate_agent' not in enabled_tool_names:
+        return ''
+    items: list[str] = [
+        'Use the Agent tool when a bounded subtask can be delegated to a specialized agent profile.',
+        'Pick a specific subagent_type when one of the available agent profiles clearly fits the task.',
+    ]
+    if not available_agents:
+        return '\n'.join(['# Agents', *prepend_bullets(items)])
+    rendered_agents = list(format_agent_listing(available_agents[:20]).splitlines())
+    items.append('Available agent types:')
+    items.append(rendered_agents)
+    if len(available_agents) > 20:
+        items.append(f'... plus {len(available_agents) - 20} more agent definitions.')
+    return '\n'.join(['# Agents', *prepend_bullets(items)])
 
 
 def get_plugin_guidance_section(prompt_context: PromptContext) -> str:

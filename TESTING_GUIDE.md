@@ -580,6 +580,24 @@ EOF
 mkdir -p ./test_cases_tasks
 ```
 
+### 4.9 Custom agent definitions
+
+```bash
+mkdir -p ./test_cases_agents/.claude/agents
+
+cat > ./test_cases_agents/.claude/agents/reviewer.md <<'EOF'
+---
+name: reviewer
+description: "Review implementation changes carefully."
+tools: read_file, grep_search
+model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+initialPrompt: Start by identifying the highest-risk files.
+---
+
+Inspect code changes and summarize correctness risks, regressions, and missing tests.
+EOF
+```
+
 ## 5. Slash Command Matrix
 
 Slash commands are handled locally before the model loop.
@@ -601,6 +619,8 @@ python3 -m src.main agent "/permissions" --cwd ./test_cases
 python3 -m src.main agent "/model" --cwd ./test_cases
 python3 -m src.main agent "/model demo-model" --cwd ./test_cases
 python3 -m src.main agent "/tools" --cwd ./test_cases
+python3 -m src.main agent "/agents" --cwd ./test_cases_agents
+python3 -m src.main agent "/agents show reviewer" --cwd ./test_cases_agents
 python3 -m src.main agent "/memory" --cwd ./test_cases
 python3 -m src.main agent "/status" --cwd ./test_cases
 python3 -m src.main agent "/session" --cwd ./test_cases
@@ -678,6 +698,8 @@ python3 -m src.main agent-prompt --cwd ./test_cases
 python3 -m src.main agent-context --cwd ./test_cases
 python3 -m src.main agent-context-raw --cwd ./test_cases
 python3 -m src.main token-budget --cwd ./test_cases
+python3 -m src.main agents --cwd ./test_cases_agents
+python3 -m src.main agents reviewer --cwd ./test_cases_agents
 ```
 
 ### 6.2 Extra working directories and `CLAUDE.md` toggle
