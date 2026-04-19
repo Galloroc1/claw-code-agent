@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.agent_manager import AgentManager, ManagedAgentGroup, ManagedAgentRecord
+from src.core.agent_manager import AgentManager, ManagedAgentGroup, ManagedAgentRecord
 
 
 class TestManagedAgentRecordDefaults(unittest.TestCase):

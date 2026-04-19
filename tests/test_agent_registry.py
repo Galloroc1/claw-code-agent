@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_registry import load_agent_registry, render_agent_detail, render_agents_report
+from src.core.agent_registry import load_agent_registry, render_agent_detail, render_agents_report
 
 
 def _write_agent(path: Path, *, name: str, description: str, body: str, extra: str = '') -> None:

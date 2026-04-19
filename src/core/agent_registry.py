@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .builtin_agents import AgentDefinition, describe_agent_tools, get_builtin_agents
+from src.builtin_agents import AgentDefinition, describe_agent_tools, get_builtin_agents
 
 _FRONTMATTER_RE = re.compile(r'^---\n(.*?)\n---\n?(.*)$', re.DOTALL)
 _AGENTS_DIR = Path('.claude') / 'agents'

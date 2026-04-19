@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.account_runtime import AccountRuntime
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentRuntimeConfig
+from src.core.account_runtime import AccountRuntime
+from src.tools.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.core.agent_types import AgentRuntimeConfig
 
 
 class AccountRuntimeTests(unittest.TestCase):

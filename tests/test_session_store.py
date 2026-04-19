@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_types import (
+from src.core.agent_types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,

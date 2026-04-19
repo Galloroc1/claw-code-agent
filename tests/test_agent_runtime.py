@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_session import AgentMessage
-from src.agent_runtime import LocalCodingAgent
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import (
+from src.core.agent_session import AgentMessage
+from src.core.agent_runtime import LocalCodingAgent
+from src.tools.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.core.agent_types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,

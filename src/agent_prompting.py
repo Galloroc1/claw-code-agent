@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .agent_context import build_context_snapshot
-from .agent_tools import AgentTool
-from .agent_types import AgentRuntimeConfig, ModelConfig
+from src.core.agent_context import build_context_snapshot
+from src.tools.agent_tools import AgentTool
+from src.core.agent_types import AgentRuntimeConfig, ModelConfig
 from .builtin_agents import AgentDefinition, format_agent_listing
 
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_plugin_cache import (
+from src.core.agent_plugin_cache import (
     MAX_PLUGIN_LINES,
     MAX_PLUGIN_PREVIEW_CHARS,
     PluginCacheEntry,

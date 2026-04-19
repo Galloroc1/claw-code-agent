@@ -8,9 +8,9 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_runtime import LocalCodingAgent
+from src.core.agent_runtime import LocalCodingAgent
 from src.agent_slash_commands import looks_like_command, parse_slash_command
-from src.agent_types import AgentRuntimeConfig, ModelConfig
+from src.core.agent_types import AgentRuntimeConfig, ModelConfig
 from src.plan_runtime import PlanRuntime
 from src.task_runtime import TaskRuntime
 

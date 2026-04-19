@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_tools import (
+from src.tools.agent_tools import (
     ToolExecutionError,
     ToolPermissionError,
     _ensure_shell_allowed,
@@ -15,7 +15,7 @@ from src.agent_tools import (
     build_tool_context,
     default_tool_registry,
 )
-from src.agent_types import AgentPermissions, AgentRuntimeConfig
+from src.core.agent_types import AgentPermissions, AgentRuntimeConfig
 
 
 def _make_context(

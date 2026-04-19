@@ -12,13 +12,12 @@ the legacy API-based compact instead.
 from __future__ import annotations
 
 import os
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from .agent_context_usage import estimate_tokens
-from .agent_session import AgentMessage
+from src.core.agent_context_usage import estimate_tokens
+from src.core.agent_session import AgentMessage
 
 if TYPE_CHECKING:
     from .compact import CompactionResult

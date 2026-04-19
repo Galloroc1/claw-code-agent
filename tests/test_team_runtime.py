@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentPermissions, AgentRuntimeConfig
+from src.tools.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.core.agent_types import AgentPermissions, AgentRuntimeConfig
 from src.team_runtime import TeamRuntime
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from src.agent_context_usage import collect_context_usage, format_context_usage
-from src.agent_session import AgentSessionState
+from src.core.agent_context_usage import collect_context_usage, format_context_usage
+from src.core.agent_session import AgentSessionState
 
 
 class AgentContextUsageTests(unittest.TestCase):

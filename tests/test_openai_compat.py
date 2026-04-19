@@ -11,7 +11,7 @@ from src.openai_compat import (
     _parse_tool_arguments,
     _parse_usage,
 )
-from src.agent_types import OutputSchemaConfig, UsageStats
+from src.core.agent_types import OutputSchemaConfig, UsageStats
 
 
 class TestJoinUrl(unittest.TestCase):

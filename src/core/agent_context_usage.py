@@ -4,9 +4,9 @@ import json
 import re
 from dataclasses import dataclass
 
-from .agent_prompting import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+from src.agent_prompting import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 from .agent_session import AgentMessage, AgentSessionState
-from .tokenizer_runtime import describe_token_counter, count_tokens
+from src.tokenizer_runtime import describe_token_counter, count_tokens
 
 _PATH_HEADER_RE = re.compile(r'^## ((?:/|[A-Za-z]:[\\/]).+)$', re.MULTILINE)
 

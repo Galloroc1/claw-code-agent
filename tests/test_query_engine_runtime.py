@@ -6,9 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_runtime import LocalCodingAgent
-from src.agent_types import AgentRuntimeConfig, ModelConfig
-from src.openai_compat import OpenAICompatClient
+from src.core.agent_runtime import LocalCodingAgent
+from src.core.agent_types import AgentRuntimeConfig, ModelConfig
 from src.plugin_runtime import PluginRuntime
 from src.query_engine import QueryEngineConfig, QueryEnginePort
 

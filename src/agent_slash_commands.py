@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from .agent_runtime import LocalCodingAgent
+    from src.core.agent_runtime import LocalCodingAgent
 
 
 @dataclass(frozen=True)
@@ -1195,10 +1195,8 @@ def _handle_effort(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
 
 def _handle_doctor(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:
     """Diagnose and verify the claw-code installation."""
-    import os
     import shutil
     import sys
-    from pathlib import Path as _Path
 
     checks: list[str] = []
 

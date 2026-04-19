@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from .agent_runtime import LocalCodingAgent
+from src.core.agent_runtime import LocalCodingAgent
 from .commands import build_command_backlog
 from .models import PermissionDenial, UsageSummary
 from .plugin_runtime import PluginRuntime

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .agent_context_usage import collect_context_usage, infer_context_window
-from .agent_session import AgentSessionState
-from .agent_types import BudgetConfig, OutputSchemaConfig
+from src.core.agent_context_usage import collect_context_usage, infer_context_window
+from src.core.agent_session import AgentSessionState
+from src.core.agent_types import BudgetConfig, OutputSchemaConfig
 from .compact import AUTOCOMPACT_BUFFER_TOKENS
 
 

@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_runtime import LocalCodingAgent
-from src.agent_session import AgentMessage, AgentSessionState
-from src.agent_types import AgentRuntimeConfig, ModelConfig, UsageStats
+from src.core.agent_runtime import LocalCodingAgent
+from src.core.agent_session import AgentMessage, AgentSessionState
+from src.core.agent_types import AgentRuntimeConfig, ModelConfig, UsageStats
 
 
 def _make_agent(tmp_dir: str) -> LocalCodingAgent:

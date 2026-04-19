@@ -7,14 +7,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_context import (
+from src.core.agent_context import (
     build_context_snapshot,
     clear_context_caches,
     set_system_prompt_injection,
 )
-from src.ask_user_runtime import AskUserRuntime
 from src.plan_runtime import PlanRuntime
-from src.agent_types import AgentRuntimeConfig
+from src.core.agent_types import AgentRuntimeConfig
 from src.task_runtime import TaskRuntime
 from src.team_runtime import TeamRuntime
 

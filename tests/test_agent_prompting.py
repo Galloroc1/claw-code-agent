@@ -6,10 +6,10 @@ from pathlib import Path
 
 from src.agent_prompting import build_prompt_context, build_system_prompt_parts, render_system_prompt
 from src.plan_runtime import PlanRuntime
-from src.agent_runtime import LocalCodingAgent
-from src.agent_session import AgentSessionState
-from src.agent_tools import default_tool_registry
-from src.agent_types import AgentPermissions, AgentRuntimeConfig, ModelConfig
+from src.core.agent_runtime import LocalCodingAgent
+from src.core.agent_session import AgentSessionState
+from src.tools.agent_tools import default_tool_registry
+from src.core.agent_types import AgentPermissions, AgentRuntimeConfig, ModelConfig
 from src.task_runtime import TaskRuntime
 
 

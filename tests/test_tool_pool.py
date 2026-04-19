@@ -4,7 +4,7 @@ import unittest
 
 from src.models import PortingModule
 from src.permissions import ToolPermissionContext
-from src.tool_pool import ToolPool, assemble_tool_pool
+from src.tools.tool_pool import ToolPool, assemble_tool_pool
 
 
 class TestAssembleToolPool(unittest.TestCase):

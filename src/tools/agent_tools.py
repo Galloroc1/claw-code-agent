@@ -14,22 +14,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Union
 
-from .agent_types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
+from src.core.agent_types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
 
 if TYPE_CHECKING:
-    from .account_runtime import AccountRuntime
-    from .ask_user_runtime import AskUserRuntime
-    from .config_runtime import ConfigRuntime
-    from .lsp_runtime import LSPRuntime
-    from .mcp_runtime import MCPRuntime
-    from .plan_runtime import PlanRuntime
-    from .remote_runtime import RemoteRuntime
-    from .remote_trigger_runtime import RemoteTriggerRuntime
-    from .search_runtime import SearchRuntime
-    from .task_runtime import TaskRuntime
-    from .team_runtime import TeamRuntime
-    from .workflow_runtime import WorkflowRuntime
-    from .worktree_runtime import WorktreeRuntime
+    pass
 
 
 class ToolPermissionError(RuntimeError):
@@ -1339,7 +1327,7 @@ def _ensure_shell_allowed(command: str, context: ToolExecutionContext) -> None:
 
 
 def _list_dir(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
-    raw_path = arguments.get('path', '.')
+    raw_path = arguments.get('path', '..')
     if not isinstance(raw_path, str):
         raise ToolExecutionError('path must be a string')
     max_entries = _coerce_int(arguments, 'max_entries', 200)
@@ -1561,7 +1549,7 @@ def _glob_search(arguments: dict[str, Any], context: ToolExecutionContext) -> st
 
 def _grep_search(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     pattern = _require_string(arguments, 'pattern')
-    raw_path = arguments.get('path', '.')
+    raw_path = arguments.get('path', '..')
     if not isinstance(raw_path, str):
         raise ToolExecutionError('path must be a string')
     literal = arguments.get('literal', False)

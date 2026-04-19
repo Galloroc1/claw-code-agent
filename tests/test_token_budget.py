@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.agent_session import AgentSessionState
-from src.agent_context_usage import ContextUsageReport, MessageBreakdown
-from src.agent_types import BudgetConfig
+from src.core.agent_session import AgentSessionState
+from src.core.agent_context_usage import ContextUsageReport, MessageBreakdown
+from src.core.agent_types import BudgetConfig
 from src.token_budget import calculate_token_budget, format_token_budget
 
 
