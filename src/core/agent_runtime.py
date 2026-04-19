@@ -7,62 +7,59 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .account_runtime import AccountRuntime
 from .agent_manager import AgentManager
 from .agent_context import clear_context_caches
 from .agent_context import render_context_report as render_agent_context_report
 from .agent_context_usage import collect_context_usage, estimate_tokens, format_context_usage
-from .compact import compact_conversation
-from .ask_user_runtime import AskUserRuntime
+from src.compact import compact_conversation
+from src.ask_user_runtime import AskUserRuntime
 from .agent_registry import (
     find_agent_definition,
     load_agent_registry,
     render_agent_detail,
     render_agents_report,
 )
-from .config_runtime import ConfigRuntime
-from .hook_policy import HookPolicyRuntime
-from .lsp_runtime import LSPRuntime
-from .mcp_runtime import MCPRuntime
-from .agent_prompting import (
+from src.config_runtime import ConfigRuntime
+from src.hook_policy import HookPolicyRuntime
+from src.mcp_runtime import MCPRuntime
+from src.agent_prompting import (
     build_prompt_context,
     build_system_prompt_parts,
     render_system_prompt,
 )
 from .agent_session import AgentSessionState
-from .agent_slash_commands import preprocess_slash_command
-from .agent_tools import (
+from src.agent_slash_commands import preprocess_slash_command
+from src.tools.agent_tools import (
     AgentTool,
     build_tool_context,
     default_tool_registry,
     execute_tool_streaming,
     serialize_tool_result,
 )
-from .agent_types import (
+from src.core.agent_types import (
     AgentRunResult,
     AgentPermissions,
     AgentRuntimeConfig,
     AssistantTurn,
     BudgetConfig,
     ModelConfig,
-    OutputSchemaConfig,
     StreamEvent,
     ToolCall,
     ToolExecutionResult,
     UsageStats,
 )
-from .openai_compat import OpenAICompatClient, OpenAICompatError
-from .plan_runtime import PlanRuntime
-from .plugin_runtime import PluginRuntime
-from .remote_runtime import RemoteRuntime
-from .remote_trigger_runtime import RemoteTriggerRuntime
-from .search_runtime import SearchRuntime
-from .task_runtime import TaskRuntime
-from .team_runtime import TeamRuntime
-from .tokenizer_runtime import describe_token_counter
-from .workflow_runtime import WorkflowRuntime
-from .worktree_runtime import WorktreeRuntime
-from .session_store import (
+from src.openai_compat import OpenAICompatClient, OpenAICompatError
+from src.plan_runtime import PlanRuntime
+from src.plugin_runtime import PluginRuntime
+from src.remote_runtime import RemoteRuntime
+from src.remote_trigger_runtime import RemoteTriggerRuntime
+from src.search_runtime import SearchRuntime
+from src.task_runtime import TaskRuntime
+from src.team_runtime import TeamRuntime
+from src.tokenizer_runtime import describe_token_counter
+from src.workflow_runtime import WorkflowRuntime
+from src.worktree_runtime import WorktreeRuntime
+from src.session_store import (
     StoredAgentSession,
     load_agent_session,
     save_agent_session,
@@ -70,13 +67,13 @@ from .session_store import (
     serialize_runtime_config,
     usage_from_payload,
 )
-from .token_budget import calculate_token_budget, format_token_budget
-from .builtin_agents import (
+from src.token_budget import calculate_token_budget, format_token_budget
+from src.builtin_agents import (
     AgentDefinition,
     ALL_AGENT_DISALLOWED_TOOLS,
     GENERAL_PURPOSE_AGENT,
 )
-from .microcompact import microcompact_messages as _microcompact_messages
+from src.microcompact import microcompact_messages as _microcompact_messages
 
 
 @dataclass(frozen=True)
@@ -112,10 +109,8 @@ class LocalCodingAgent:
     remote_runtime: RemoteRuntime | None = None
     remote_trigger_runtime: RemoteTriggerRuntime | None = None
     search_runtime: SearchRuntime | None = None
-    account_runtime: AccountRuntime | None = None
     ask_user_runtime: AskUserRuntime | None = None
     config_runtime: ConfigRuntime | None = None
-    lsp_runtime: LSPRuntime | None = None
     plan_runtime: PlanRuntime | None = None
     task_runtime: TaskRuntime | None = None
     team_runtime: TeamRuntime | None = None
@@ -166,11 +161,6 @@ class LocalCodingAgent:
                 self.runtime_config.cwd,
                 tuple(str(path) for path in self.runtime_config.additional_working_directories),
             )
-        if self.account_runtime is None:
-            self.account_runtime = AccountRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
         if self.ask_user_runtime is None:
             self.ask_user_runtime = AskUserRuntime.from_workspace(
                 self.runtime_config.cwd,
@@ -178,11 +168,6 @@ class LocalCodingAgent:
             )
         if self.config_runtime is None:
             self.config_runtime = ConfigRuntime.from_workspace(self.runtime_config.cwd)
-        if self.lsp_runtime is None:
-            self.lsp_runtime = LSPRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
         if self.plan_runtime is None:
             self.plan_runtime = PlanRuntime.from_workspace(self.runtime_config.cwd)
         if self.task_runtime is None:
@@ -218,10 +203,8 @@ class LocalCodingAgent:
                 else None
             ),
             search_runtime=self.search_runtime,
-            account_runtime=self.account_runtime,
             ask_user_runtime=self.ask_user_runtime,
             config_runtime=self.config_runtime,
-            lsp_runtime=self.lsp_runtime,
             mcp_runtime=self.mcp_runtime,
             remote_runtime=self.remote_runtime,
             remote_trigger_runtime=self.remote_trigger_runtime,
@@ -3426,11 +3409,7 @@ class LocalCodingAgent:
         return '\n'.join(['# Memory', '', claude_md])
 
     def render_account_report(self, profile: str | None = None) -> str:
-        if self.account_runtime is None:
-            return '# Account\n\nNo local account runtime is available.'
-        if profile:
-            return self.account_runtime.render_profile(profile)
-        return '\n'.join(['# Account', '', self.account_runtime.render_summary()])
+        return '# Account\n\nAccount management has been removed.'
 
     def render_search_report(
         self,
@@ -3481,9 +3460,7 @@ class LocalCodingAgent:
         return '\n'.join(['# Search', '', report.as_text()])
 
     def render_account_profiles_report(self, query: str | None = None) -> str:
-        if self.account_runtime is None:
-            return '# Account Profiles\n\nNo local account runtime is available.'
-        return self.account_runtime.render_profiles_index(query=query)
+        return '# Account Profiles\n\nAccount management has been removed.'
 
     def render_account_login_report(
         self,
@@ -3492,18 +3469,10 @@ class LocalCodingAgent:
         provider: str | None = None,
         auth_mode: str | None = None,
     ) -> str:
-        if self.account_runtime is None:
-            return '# Account\n\nNo local account runtime is available.'
-        report = self.account_runtime.login(target, provider=provider, auth_mode=auth_mode)
-        clear_context_caches()
-        return '\n'.join(['# Account', '', report.as_text()])
+        return '# Account\n\nAccount management has been removed.'
 
     def render_account_logout_report(self) -> str:
-        if self.account_runtime is None:
-            return '# Account\n\nNo local account runtime is available.'
-        report = self.account_runtime.logout(reason='slash_or_cli_logout')
-        clear_context_caches()
-        return '\n'.join(['# Account', '', report.as_text()])
+        return '# Account\n\nAccount management has been removed.'
 
     def render_config_report(self) -> str:
         if self.config_runtime is None:
@@ -3511,17 +3480,10 @@ class LocalCodingAgent:
         return '\n'.join(['# Config', '', self.config_runtime.render_summary()])
 
     def render_lsp_report(self) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP\n\nNo local LSP runtime is available.'
-        return '\n'.join(['# LSP', '', self.lsp_runtime.render_summary()])
+        return '# LSP\n\nLSP support has been removed.'
 
     def render_lsp_document_symbols_report(self, file_path: str) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Document Symbols\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_document_symbols(file_path)
-        except KeyError as exc:
-            return f'# LSP Document Symbols\n\n{exc}'
+        return '# LSP Document Symbols\n\nLSP support has been removed.'
 
     def render_lsp_workspace_symbols_report(
         self,
@@ -3529,9 +3491,7 @@ class LocalCodingAgent:
         *,
         max_results: int = 50,
     ) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Workspace Symbols\n\nNo local LSP runtime is available.'
-        return self.lsp_runtime.render_workspace_symbols(query, max_results=max_results)
+        return '# LSP Workspace Symbols\n\nLSP support has been removed.'
 
     def render_lsp_definition_report(
         self,
@@ -3541,17 +3501,7 @@ class LocalCodingAgent:
         *,
         max_results: int = 20,
     ) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Definition\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_definition(
-                file_path,
-                line,
-                character,
-                max_results=max_results,
-            )
-        except KeyError as exc:
-            return f'# LSP Definition\n\n{exc}'
+        return '# LSP Definition\n\nLSP support has been removed.'
 
     def render_lsp_references_report(
         self,
@@ -3561,33 +3511,13 @@ class LocalCodingAgent:
         *,
         max_results: int = 50,
     ) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP References\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_references(
-                file_path,
-                line,
-                character,
-                max_results=max_results,
-            )
-        except KeyError as exc:
-            return f'# LSP References\n\n{exc}'
+        return '# LSP References\n\nLSP support has been removed.'
 
     def render_lsp_hover_report(self, file_path: str, line: int, character: int) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Hover\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_hover(file_path, line, character)
-        except KeyError as exc:
-            return f'# LSP Hover\n\n{exc}'
+        return '# LSP Hover\n\nLSP support has been removed.'
 
     def render_lsp_diagnostics_report(self, file_path: str | None = None) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Diagnostics\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_diagnostics(file_path)
-        except KeyError as exc:
-            return f'# LSP Diagnostics\n\n{exc}'
+        return '# LSP Diagnostics\n\nLSP support has been removed.'
 
     def render_lsp_prepare_call_hierarchy_report(
         self,
@@ -3595,12 +3525,7 @@ class LocalCodingAgent:
         line: int,
         character: int,
     ) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Call Hierarchy\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_prepare_call_hierarchy(file_path, line, character)
-        except KeyError as exc:
-            return f'# LSP Call Hierarchy\n\n{exc}'
+        return '# LSP Call Hierarchy\n\nLSP support has been removed.'
 
     def render_lsp_incoming_calls_report(
         self,
@@ -3610,17 +3535,7 @@ class LocalCodingAgent:
         *,
         max_results: int = 50,
     ) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Incoming Calls\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_incoming_calls(
-                file_path,
-                line,
-                character,
-                max_results=max_results,
-            )
-        except KeyError as exc:
-            return f'# LSP Incoming Calls\n\n{exc}'
+        return '# LSP Incoming Calls\n\nLSP support has been removed.'
 
     def render_lsp_outgoing_calls_report(
         self,
@@ -3630,17 +3545,7 @@ class LocalCodingAgent:
         *,
         max_results: int = 50,
     ) -> str:
-        if self.lsp_runtime is None or not self.lsp_runtime.has_lsp_support():
-            return '# LSP Outgoing Calls\n\nNo local LSP runtime is available.'
-        try:
-            return self.lsp_runtime.render_outgoing_calls(
-                file_path,
-                line,
-                character,
-                max_results=max_results,
-            )
-        except KeyError as exc:
-            return f'# LSP Outgoing Calls\n\n{exc}'
+        return '# LSP Outgoing Calls\n\nLSP support has been removed.'
 
     def render_config_effective_report(self) -> str:
         if self.config_runtime is None:
@@ -3974,13 +3879,6 @@ class LocalCodingAgent:
                 lines.append(
                     f'- Active search provider: {active_provider.name} ({active_provider.provider})'
                 )
-        if self.account_runtime is not None and self.account_runtime.has_account_state():
-            lines.append(f'- Account profiles: {len(self.account_runtime.profiles)}')
-            if self.account_runtime.active_session is not None:
-                session = self.account_runtime.active_session
-                lines.append(
-                    f'- Active account: {session.provider} -> {session.identity}'
-                )
         if self.ask_user_runtime is not None and self.ask_user_runtime.has_state():
             lines.append(f'- Ask-user queued answers: {len(self.ask_user_runtime.queued_answers)}')
             lines.append(f'- Ask-user history: {len(self.ask_user_runtime.history)}')
@@ -3988,10 +3886,6 @@ class LocalCodingAgent:
             lines.append(f'- Config sources: {len(self.config_runtime.sources)}')
             lines.append(
                 f'- Effective config keys: {len(self.config_runtime.list_keys())}'
-            )
-        if self.lsp_runtime is not None and self.lsp_runtime.has_lsp_support():
-            lines.append(
-                f'- LSP indexed files: {len(self.lsp_runtime._workspace_files())}'
             )
         if self.plan_runtime is not None and self.plan_runtime.steps:
             lines.append(f'- Local plan steps: {len(self.plan_runtime.steps)}')
@@ -4106,11 +4000,6 @@ class LocalCodingAgent:
                 self.runtime_config.cwd,
                 additional_working_directories=additional_dirs,
             )
-        if tool_name.startswith('account_'):
-            self.account_runtime = AccountRuntime.from_workspace(
-                self.runtime_config.cwd,
-                additional_working_directories=additional_dirs,
-            )
         if tool_name == 'ask_user_question':
             self.ask_user_runtime = AskUserRuntime.from_workspace(
                 self.runtime_config.cwd,
@@ -4138,10 +4027,8 @@ class LocalCodingAgent:
             self.tool_context,
             tool_registry=self.tool_registry,
             search_runtime=self.search_runtime,
-            account_runtime=self.account_runtime,
             ask_user_runtime=self.ask_user_runtime,
             config_runtime=self.config_runtime,
-            lsp_runtime=self.lsp_runtime,
             remote_runtime=self.remote_runtime,
             remote_trigger_runtime=self.remote_trigger_runtime,
             plan_runtime=self.plan_runtime,
@@ -4184,19 +4071,11 @@ class LocalCodingAgent:
             self.runtime_config.cwd,
             additional_dirs,
         )
-        self.account_runtime = AccountRuntime.from_workspace(
-            self.runtime_config.cwd,
-            additional_dirs,
-        )
         self.ask_user_runtime = AskUserRuntime.from_workspace(
             self.runtime_config.cwd,
             additional_dirs,
         )
         self.config_runtime = ConfigRuntime.from_workspace(self.runtime_config.cwd)
-        self.lsp_runtime = LSPRuntime.from_workspace(
-            self.runtime_config.cwd,
-            additional_dirs,
-        )
         self.task_runtime = TaskRuntime.from_workspace(self.runtime_config.cwd)
         self.plan_runtime = PlanRuntime.from_workspace(self.runtime_config.cwd)
         self.team_runtime = TeamRuntime.from_workspace(
@@ -4227,10 +4106,8 @@ class LocalCodingAgent:
                 else None
             ),
             search_runtime=self.search_runtime,
-            account_runtime=self.account_runtime,
             ask_user_runtime=self.ask_user_runtime,
             config_runtime=self.config_runtime,
-            lsp_runtime=self.lsp_runtime,
             mcp_runtime=self.mcp_runtime,
             remote_runtime=self.remote_runtime,
             remote_trigger_runtime=self.remote_trigger_runtime,

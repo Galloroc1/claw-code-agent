@@ -9,22 +9,20 @@ from functools import lru_cache
 from pathlib import Path
 
 from .agent_plugin_cache import load_plugin_cache_summary
-from .account_runtime import AccountRuntime
-from .ask_user_runtime import AskUserRuntime
-from .config_runtime import ConfigRuntime
-from .hook_policy import HookPolicyRuntime
-from .lsp_runtime import LSPRuntime
-from .mcp_runtime import MCPRuntime
-from .plan_runtime import PlanRuntime
-from .plugin_runtime import PluginRuntime
-from .remote_runtime import RemoteRuntime
-from .remote_trigger_runtime import RemoteTriggerRuntime
-from .search_runtime import SearchRuntime
-from .task_runtime import TaskRuntime
-from .team_runtime import TeamRuntime
-from .workflow_runtime import WorkflowRuntime
-from .worktree_runtime import WorktreeRuntime
-from .agent_types import AgentRuntimeConfig
+from src.ask_user_runtime import AskUserRuntime
+from src.config_runtime import ConfigRuntime
+from src.hook_policy import HookPolicyRuntime
+from src.mcp_runtime import MCPRuntime
+from src.plan_runtime import PlanRuntime
+from src.plugin_runtime import PluginRuntime
+from src.remote_runtime import RemoteRuntime
+from src.remote_trigger_runtime import RemoteTriggerRuntime
+from src.search_runtime import SearchRuntime
+from src.task_runtime import TaskRuntime
+from src.team_runtime import TeamRuntime
+from src.workflow_runtime import WorkflowRuntime
+from src.worktree_runtime import WorktreeRuntime
+from src.core.agent_types import AgentRuntimeConfig
 
 MAX_STATUS_CHARS = 2000
 MAX_MEMORY_CHARACTER_COUNT = 40000
@@ -246,18 +244,12 @@ def _get_user_context_cached(
     search_runtime = SearchRuntime.from_workspace(Path(cwd), additional_working_directories)
     if search_runtime.has_search_runtime():
         context['searchRuntime'] = search_runtime.render_summary()
-    account_runtime = AccountRuntime.from_workspace(Path(cwd), additional_working_directories)
-    if account_runtime.has_account_state():
-        context['accountRuntime'] = account_runtime.render_summary()
     ask_user_runtime = AskUserRuntime.from_workspace(Path(cwd), additional_working_directories)
     if ask_user_runtime.has_state():
         context['askUserRuntime'] = ask_user_runtime.render_summary()
     config_runtime = ConfigRuntime.from_workspace(Path(cwd))
     if config_runtime.has_config():
         context['configRuntime'] = config_runtime.render_summary()
-    lsp_runtime = LSPRuntime.from_workspace(Path(cwd), additional_working_directories)
-    if lsp_runtime.has_lsp_support():
-        context['lspRuntime'] = lsp_runtime.render_summary()
     plan_runtime = PlanRuntime.from_workspace(Path(cwd))
     if plan_runtime.steps:
         context['planRuntime'] = plan_runtime.render_summary()

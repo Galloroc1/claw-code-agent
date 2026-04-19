@@ -1,8 +1,7 @@
 """Python porting workspace for the Claude Code rewrite effort."""
 
-from .account_runtime import AccountRuntime, AccountProfile, AccountSessionState, AccountStatusReport
 from .ask_user_runtime import AskUserRuntime, AskUserResponse, QueuedUserAnswer
-from .agent_context import (
+from src.core.agent_context import (
     AgentContextSnapshot,
     build_context_snapshot,
     clear_context_caches,
@@ -10,8 +9,8 @@ from .agent_context import (
     get_user_context,
     set_system_prompt_injection,
 )
-from .agent_manager import AgentManager
-from .agent_registry import (
+from src.core.agent_manager import AgentManager
+from src.core.agent_registry import (
     AgentLoadError,
     AgentRegistrySnapshot,
     find_agent_definition,
@@ -19,14 +18,13 @@ from .agent_registry import (
     render_agent_detail,
     render_agents_report,
 )
-from .agent_runtime import LocalCodingAgent
-from .agent_session import AgentMessage, AgentSessionState
-from .agent_tools import build_tool_context, default_tool_registry, execute_tool
-from .agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig
+from src.core.agent_runtime import LocalCodingAgent
+from src.core.agent_session import AgentMessage, AgentSessionState
+from src.tools.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.core.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig
 from .background_runtime import BackgroundSessionRuntime
 from .commands import PORTED_COMMANDS, build_command_backlog
 from .config_runtime import ConfigMutation, ConfigRuntime
-from .lsp_runtime import LSPCallEdge, LSPDiagnostic, LSPReference, LSPRuntime, LSPSymbol
 from .mcp_runtime import MCPRuntime, MCPResource, MCPServerProfile, MCPTool
 from .parity_audit import ParityAuditResult, run_parity_audit
 from .plan_runtime import PlanRuntime, PlanStep
@@ -34,7 +32,7 @@ from .plugin_runtime import PluginRuntime
 from .port_manifest import PortManifest, build_port_manifest
 from .query_engine import QueryEnginePort, TurnResult
 from .remote_trigger_runtime import RemoteTriggerDefinition, RemoteTriggerRunRecord, RemoteTriggerRuntime
-from .runtime import PortRuntime, RuntimeSession
+from src.runtime import PortRuntime, RuntimeSession
 from .search_runtime import SearchProviderProfile, SearchResult, SearchRuntime, SearchStatusReport
 from .session_store import StoredSession, load_session, save_session
 from .system_init import build_system_init_message
@@ -55,10 +53,6 @@ __all__ = [
     'AgentRegistrySnapshot',
     'AgentRunResult',
     'AgentRuntimeConfig',
-    'AccountProfile',
-    'AccountRuntime',
-    'AccountSessionState',
-    'AccountStatusReport',
     'AskUserResponse',
     'AskUserRuntime',
     'AgentMessage',
@@ -66,11 +60,6 @@ __all__ = [
     'BackgroundSessionRuntime',
     'ConfigMutation',
     'ConfigRuntime',
-    'LSPCallEdge',
-    'LSPDiagnostic',
-    'LSPReference',
-    'LSPRuntime',
-    'LSPSymbol',
     'LocalCodingAgent',
     'MCPResource',
     'MCPRuntime',
